@@ -19,7 +19,7 @@ class DATAASSETSHEETEDITOR_API UDataAssetSheet : public UObject
 
 public:
 	// 対象DataAssetクラス / Target DataAsset class to display in the spreadsheet
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "DataAssetSheet")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "DataAssetSheet|Settings")
 	TSubclassOf<UDataAsset> TargetClass;
 
 	// 表示用クラス（派生クラスのプロパティも列に表示したい場合に指定）/ Display class for additional columns from derived class
