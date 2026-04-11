@@ -6,6 +6,8 @@
 #include "Toolkits/AssetEditorToolkit.h"
 
 class UDataAssetSheet;
+class SDataAssetSheetEditor;
+class SDataAssetSheetSettingsTab;
 
 /**
  * DataAssetSheetのアセットエディタ / Asset editor toolkit for UDataAssetSheet
@@ -26,12 +28,19 @@ public:
 	virtual void UnregisterTabSpawners(const TSharedRef<FTabManager>& InTabManager) override;
 
 private:
-	// メインタブ生成コールバック / Main tab spawn callback
-	TSharedRef<SDockTab> SpawnMainTab(const FSpawnTabArgs& Args);
+	// タブ生成コールバック / Tab spawn callbacks
+	TSharedRef<SDockTab> SpawnTableTab(const FSpawnTabArgs& Args);
+	TSharedRef<SDockTab> SpawnDetailsTab(const FSpawnTabArgs& Args);
+	TSharedRef<SDockTab> SpawnSettingsTab(const FSpawnTabArgs& Args);
 
 	// 編集中のアセット / The asset being edited
 	TWeakObjectPtr<UDataAssetSheet> EditingAsset;
 
-	// メインタブID / Main tab identifier
-	static const FName MainTabId;
+	// エディタウィジェット / Editor widget (owns table and details)
+	TSharedPtr<SDataAssetSheetEditor> EditorWidget;
+
+	// タブID / Tab identifiers
+	static const FName TableTabId;
+	static const FName DetailsTabId;
+	static const FName SettingsTabId;
 };

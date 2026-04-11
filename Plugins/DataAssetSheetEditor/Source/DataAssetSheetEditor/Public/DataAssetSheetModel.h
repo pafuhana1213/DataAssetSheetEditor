@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
 #include "Engine/StreamableManager.h"
+#include "Engine/EngineTypes.h"
 
 // ロード状態 / Asset loading state
 enum class EDataAssetSheetLoadingState : uint8
@@ -42,8 +43,10 @@ public:
 	FDataAssetSheetModel();
 	~FDataAssetSheetModel();
 
-	// アセット検索（ロードなし）/ Discover assets without loading them
-	void DiscoverAssets(UClass* InTargetClass);
+	// アセット検索（登録ベース）/ Discover assets based on registration settings
+	void DiscoverAssets(UClass* InTargetClass, bool bShowAll,
+		const TArray<TSoftObjectPtr<UDataAsset>>& ManualAssets,
+		const TArray<FCollectionReference>& Collections);
 
 	// 非同期ロード開始 / Start async loading of discovered assets
 	void RequestAsyncLoad(FOnAssetsLoaded OnCompleted);
@@ -69,6 +72,9 @@ public:
 	bool IsFiltered() const { return !FilterText.IsEmpty(); }
 
 private:
+	// 行データの追加ヘルパー（重複排除付き）/ Add row data with deduplication
+	void AddRowDataFromAssetData(const FAssetData& AssetData, TSet<FSoftObjectPath>& AddedPaths);
+
 	// 行データリスト / Row data list (one per discovered asset)
 	TArray<TSharedPtr<FDataAssetRowData>> RowDataList;
 

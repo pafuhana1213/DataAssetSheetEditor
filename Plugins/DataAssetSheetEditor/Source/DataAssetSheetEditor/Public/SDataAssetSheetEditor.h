@@ -27,6 +27,13 @@ public:
 	void Construct(const FArguments& InArgs);
 	virtual ~SDataAssetSheetEditor();
 
+	// タブ用ウィジェット取得 / Get widgets for separate tabs
+	TSharedRef<SWidget> GetTableWidget() const;
+	TSharedRef<SWidget> GetDetailsWidget() const;
+
+	// 登録変更時にテーブルを再構築 / Rebuild table when registration changes
+	void OnSettingsChanged();
+
 private:
 	// テーブル構築 / Build table from model data
 	void RebuildTable();
@@ -53,6 +60,7 @@ private:
 	EVisibility GetLoadingVisibility() const;
 	EVisibility GetTableVisibility() const;
 	EVisibility GetEmptyMessageVisibility() const;
+	FText GetEmptyMessageText() const;
 
 	// 詳細パネルでのプロパティ変更時コールバック / Callback for property changes in details panel
 	void OnDetailsPropertyChanged(const FPropertyChangedEvent& PropertyChangedEvent);
@@ -76,6 +84,9 @@ private:
 	// 対象クラスに該当するアセットか判定 / Check if asset belongs to the target class
 	bool IsTargetAsset(const FAssetData& AssetData) const;
 
+	// Hot Reload完了時のコールバック / Hot reload completion callback
+	void OnReloadComplete(EReloadCompleteReason Reason);
+
 	// データモデル / Data model
 	TSharedPtr<FDataAssetSheetModel> Model;
 
@@ -86,4 +97,8 @@ private:
 	TSharedPtr<SHeaderRow> HeaderRow;
 	TSharedPtr<SListView<TSharedPtr<FDataAssetRowData>>> AssetListView;
 	TSharedPtr<IDetailsView> DetailsView;
+
+	// タブ用ウィジェット / Widgets for separate tabs
+	TSharedPtr<SWidget> TableWidget;
+	TSharedPtr<SWidget> DetailsWidget;
 };

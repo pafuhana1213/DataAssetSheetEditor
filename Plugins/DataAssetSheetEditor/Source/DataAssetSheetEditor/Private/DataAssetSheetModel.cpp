@@ -4,6 +4,9 @@
 #include "DataAssetSheetEditorModule.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "UObject/FieldIterator.h"
+#include "ICollectionManager.h"
+#include "CollectionManagerModule.h"
+#include "ICollectionContainer.h"
 
 FDataAssetSheetModel::FDataAssetSheetModel()
 {
@@ -14,7 +17,25 @@ FDataAssetSheetModel::~FDataAssetSheetModel()
 	CancelLoading();
 }
 
-void FDataAssetSheetModel::DiscoverAssets(UClass* InTargetClass)
+void FDataAssetSheetModel::AddRowDataFromAssetData(const FAssetData& AssetData, TSet<FSoftObjectPath>& AddedPaths)
+{
+	FSoftObjectPath Path = AssetData.GetSoftObjectPath();
+	if (AddedPaths.Contains(Path))
+	{
+		return;
+	}
+
+	AddedPaths.Add(Path);
+
+	TSharedPtr<FDataAssetRowData> RowData = MakeShared<FDataAssetRowData>();
+	RowData->AssetPath = Path;
+	RowData->AssetName = AssetData.AssetName.ToString();
+	RowDataList.Add(RowData);
+}
+
+void FDataAssetSheetModel::DiscoverAssets(UClass* InTargetClass, bool bShowAll,
+	const TArray<TSoftObjectPtr<UDataAsset>>& ManualAssets,
+	const TArray<FCollectionReference>& Collections)
 {
 	CancelLoading();
 	RowDataList.Empty();
@@ -25,20 +46,82 @@ void FDataAssetSheetModel::DiscoverAssets(UClass* InTargetClass)
 		return;
 	}
 
-	// AssetRegistryからアセットを検索（ロードなし）/ Discover assets from registry without loading
 	IAssetRegistry& AssetRegistry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
-	TArray<FAssetData> AssetDataList;
-	AssetRegistry.GetAssetsByClass(InTargetClass->GetClassPathName(), AssetDataList, true);
+	TSet<FSoftObjectPath> AddedPaths;
 
-	for (const FAssetData& AssetData : AssetDataList)
+	// 1. bShowAll=true の場合、全アセットを検索 / If bShowAll, discover all assets via AssetRegistry
+	if (bShowAll)
 	{
-		TSharedPtr<FDataAssetRowData> RowData = MakeShared<FDataAssetRowData>();
-		RowData->AssetPath = AssetData.GetSoftObjectPath();
-		RowData->AssetName = AssetData.AssetName.ToString();
-		RowDataList.Add(RowData);
+		TArray<FAssetData> AssetDataList;
+		AssetRegistry.GetAssetsByClass(InTargetClass->GetClassPathName(), AssetDataList, true);
+		for (const FAssetData& AssetData : AssetDataList)
+		{
+			AddRowDataFromAssetData(AssetData, AddedPaths);
+		}
 	}
 
-	UE_LOG(LogDataAssetSheetEditor, Log, TEXT("Discovered %d assets of class %s"), RowDataList.Num(), *InTargetClass->GetName());
+	// 2. 手動登録アセットを追加 / Add manually registered assets
+	for (const TSoftObjectPtr<UDataAsset>& SoftPtr : ManualAssets)
+	{
+		FSoftObjectPath Path = SoftPtr.ToSoftObjectPath();
+		if (Path.IsNull() || AddedPaths.Contains(Path))
+		{
+			continue;
+		}
+
+		FAssetData AssetData = AssetRegistry.GetAssetByObjectPath(Path);
+		if (AssetData.IsValid())
+		{
+			AddRowDataFromAssetData(AssetData, AddedPaths);
+		}
+	}
+
+	// 3. コレクション経由のアセットを追加 / Add assets from collections
+	if (!Collections.IsEmpty() && FModuleManager::Get().IsModuleLoaded("CollectionManager"))
+	{
+		ICollectionManager& CollectionManager = FCollectionManagerModule::GetModule().Get();
+		const TSharedRef<ICollectionContainer>& Container = CollectionManager.GetProjectCollectionContainer();
+
+		for (const FCollectionReference& Collection : Collections)
+		{
+			if (Collection.CollectionName.IsNone())
+			{
+				continue;
+			}
+
+			// コレクション名からShareTypeを解決 / Resolve ShareType from collection name
+			TArray<FCollectionNameType> FoundCollections;
+			Container->GetCollections(Collection.CollectionName, FoundCollections);
+
+			for (const FCollectionNameType& Found : FoundCollections)
+			{
+				TArray<FSoftObjectPath> CollectionAssets;
+				Container->GetAssetsInCollection(Found.Name, Found.Type, CollectionAssets);
+
+				for (const FSoftObjectPath& AssetPath : CollectionAssets)
+				{
+					if (AddedPaths.Contains(AssetPath))
+					{
+						continue;
+					}
+
+					// TargetClassとの一致を検証 / Validate against TargetClass
+					FAssetData AssetData = AssetRegistry.GetAssetByObjectPath(AssetPath);
+					if (AssetData.IsValid())
+					{
+						UClass* AssetClass = AssetData.GetClass();
+						if (AssetClass && AssetClass->IsChildOf(InTargetClass))
+						{
+							AddRowDataFromAssetData(AssetData, AddedPaths);
+						}
+					}
+				}
+			}
+		}
+	}
+
+	UE_LOG(LogDataAssetSheetEditor, Log, TEXT("Discovered %d assets of class %s (ShowAll=%d, ManualAssets=%d, Collections=%d)"),
+		RowDataList.Num(), *InTargetClass->GetName(), bShowAll, ManualAssets.Num(), Collections.Num());
 }
 
 void FDataAssetSheetModel::RequestAsyncLoad(FOnAssetsLoaded OnCompleted)

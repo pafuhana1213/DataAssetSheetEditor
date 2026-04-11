@@ -6,13 +6,15 @@
 #include "DataAssetSheetEditorModule.h"
 #include "PropertyEditorModule.h"
 #include "IDetailsView.h"
-#include "Widgets/Layout/SSplitter.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Views/SHeaderRow.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Images/SThrobber.h"
 #include "Widgets/Input/SHyperlink.h"
+#include "Widgets/Input/SCheckBox.h"
+#include "UObject/Package.h"
+#include "Widgets/SNullWidget.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "ContentBrowserModule.h"
 #include "IContentBrowserSingleton.h"
@@ -29,7 +31,10 @@
 class SDataAssetSheetRow : public SMultiColumnTableRow<TSharedPtr<FDataAssetRowData>>
 {
 public:
-	SLATE_BEGIN_ARGS(SDataAssetSheetRow) {}
+	SLATE_BEGIN_ARGS(SDataAssetSheetRow)
+		: _IndexInList(0)
+	{}
+		SLATE_ARGUMENT(int32, IndexInList)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs, const TSharedRef<STableViewBase>& InOwnerTable,
@@ -37,19 +42,47 @@ public:
 	{
 		RowData = InRowData;
 		Model = InModel;
+		IndexInList = InArgs._IndexInList;
 		SMultiColumnTableRow::Construct(FSuperRowType::FArguments(), InOwnerTable);
+	}
+
+	// 交互背景色 / Alternating row background color
+	virtual const FSlateBrush* GetBorder() const override
+	{
+		static const FSlateColorBrush EvenBrush(FLinearColor(0.0f, 0.0f, 0.0f, 0.0f));
+		static const FSlateColorBrush OddBrush(FLinearColor(1.0f, 1.0f, 1.0f, 0.03f));
+		return (IndexInList % 2 == 0) ? &EvenBrush : &OddBrush;
 	}
 
 	virtual TSharedRef<SWidget> GenerateWidgetForColumn(const FName& ColumnId) override
 	{
-		// アセット名列 / Asset name column — click to open, right-click for context menu
+		// アセット名列（未保存時は * 表示）/ Asset name column with unsaved indicator
 		if (ColumnId == "AssetName")
 		{
+			TWeakPtr<FDataAssetRowData> WeakRowData = RowData;
+
 			return SNew(SBox)
 				.Padding(FMargin(4.0f, 2.0f))
 				[
 					SNew(SHyperlink)
-						.Text(FText::FromString(RowData->AssetName))
+						.Text_Lambda([WeakRowData]() -> FText
+						{
+							TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
+							if (!PinnedRow.IsValid())
+							{
+								return FText::GetEmpty();
+							}
+							FString DisplayName = PinnedRow->AssetName;
+							if (PinnedRow->IsLoaded())
+							{
+								UPackage* Package = PinnedRow->Asset->GetOutermost();
+								if (Package && Package->IsDirty())
+								{
+									DisplayName = TEXT("* ") + DisplayName;
+								}
+							}
+							return FText::FromString(DisplayName);
+						})
 						.OnNavigate(this, &SDataAssetSheetRow::OnAssetNameClicked)
 				];
 		}
@@ -69,12 +102,50 @@ public:
 
 			if (Prop)
 			{
-				FString ValueText = Model->GetPropertyValueText(RowData->Asset.Get(), Prop);
+				TWeakPtr<FDataAssetRowData> WeakRowData = RowData;
+				TWeakPtr<FDataAssetSheetModel> WeakModel = Model;
+				FProperty* CapturedProp = Prop;
+
+				// Bool値はチェックボックスで表示（読み取り専用）/ Display bool as read-only checkbox
+				if (CastField<FBoolProperty>(Prop))
+				{
+					return SNew(SBox)
+						.Padding(FMargin(4.0f, 2.0f))
+						[
+							SNew(SCheckBox)
+								.IsChecked_Lambda([WeakRowData, CapturedProp]() -> ECheckBoxState
+								{
+									TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
+									if (PinnedRow.IsValid() && PinnedRow->IsLoaded())
+									{
+										const FBoolProperty* BoolProp = CastField<FBoolProperty>(CapturedProp);
+										const void* ValuePtr = BoolProp->ContainerPtrToValuePtr<void>(PinnedRow->Asset.Get());
+										return BoolProp->GetPropertyValue(ValuePtr)
+											? ECheckBoxState::Checked
+											: ECheckBoxState::Unchecked;
+									}
+									return ECheckBoxState::Unchecked;
+								})
+								.IsEnabled(false)
+						];
+				}
+
+				// その他のプロパティはTAttributeでリアルタイム更新 / Other properties with TAttribute for real-time updates
 				return SNew(SBox)
 					.Padding(FMargin(4.0f, 2.0f))
 					[
 						SNew(STextBlock)
-							.Text(FText::FromString(ValueText))
+							.Text_Lambda([WeakRowData, WeakModel, CapturedProp]() -> FText
+							{
+								TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
+								TSharedPtr<FDataAssetSheetModel> PinnedModel = WeakModel.Pin();
+								if (PinnedRow.IsValid() && PinnedModel.IsValid() && PinnedRow->IsLoaded())
+								{
+									return FText::FromString(
+										PinnedModel->GetPropertyValueText(PinnedRow->Asset.Get(), CapturedProp));
+								}
+								return FText::GetEmpty();
+							})
 					];
 			}
 		}
@@ -137,6 +208,7 @@ public:
 private:
 	TSharedPtr<FDataAssetRowData> RowData;
 	TSharedPtr<FDataAssetSheetModel> Model;
+	int32 IndexInList = 0;
 };
 
 // --- SDataAssetSheetEditor ---
@@ -168,10 +240,8 @@ void SDataAssetSheetEditor::Construct(const FArguments& InArgs)
 		.SelectionMode(ESelectionMode::Multi)
 		.HeaderRow(HeaderRow);
 
-	// レイアウト構築 / Build layout
-	ChildSlot
-	[
-		SNew(SVerticalBox)
+	// テーブルウィジェット構築（ツールバー + テーブル + オーバーレイ）/ Build table widget
+	TableWidget = SNew(SVerticalBox)
 
 		// ツールバー / Toolbar
 		+ SVerticalBox::Slot()
@@ -212,73 +282,69 @@ void SDataAssetSheetEditor::Construct(const FArguments& InArgs)
 			]
 		]
 
-		// メインコンテンツ（テーブル + 詳細パネル）/ Main content (table + details panel)
+		// テーブル + ローディングオーバーレイ / Table with loading overlay
 		+ SVerticalBox::Slot()
 		.FillHeight(1.0f)
 		[
-			SNew(SSplitter)
-				.Orientation(Orient_Horizontal)
+			SNew(SOverlay)
 
-			// 左：テーブル + ローディングオーバーレイ / Left: table with loading overlay
-			+ SSplitter::Slot()
-			.Value(0.6f)
+			// テーブル本体 / Table
+			+ SOverlay::Slot()
 			[
-				SNew(SOverlay)
+				AssetListView.ToSharedRef()
+			]
 
-				// テーブル本体 / Table
-				+ SOverlay::Slot()
-				[
-					AssetListView.ToSharedRef()
-				]
-
-				// ローディングオーバーレイ / Loading overlay
-				+ SOverlay::Slot()
-				.HAlign(HAlign_Center)
-				.VAlign(VAlign_Center)
-				[
-					SNew(SBox)
-						.Visibility(this, &SDataAssetSheetEditor::GetLoadingVisibility)
+			// ローディングオーバーレイ / Loading overlay
+			+ SOverlay::Slot()
+			.HAlign(HAlign_Center)
+			.VAlign(VAlign_Center)
+			[
+				SNew(SBox)
+					.Visibility(this, &SDataAssetSheetEditor::GetLoadingVisibility)
+					[
+						SNew(SVerticalBox)
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						.HAlign(HAlign_Center)
 						[
-							SNew(SVerticalBox)
-							+ SVerticalBox::Slot()
-							.AutoHeight()
-							.HAlign(HAlign_Center)
-							[
-								SNew(SThrobber)
-							]
-							+ SVerticalBox::Slot()
-							.AutoHeight()
-							.HAlign(HAlign_Center)
-							.Padding(0.0f, 8.0f, 0.0f, 0.0f)
-							[
-								SNew(STextBlock)
-									.Text(LOCTEXT("Loading", "Loading assets..."))
-							]
+							SNew(SThrobber)
 						]
-				]
-
-				// アセット0件メッセージ / Empty state message
-				+ SOverlay::Slot()
-				.HAlign(HAlign_Center)
-				.VAlign(VAlign_Center)
-				[
-					SNew(STextBlock)
-						.Text(LOCTEXT("NoAssets", "No assets found. Create DataAssets of the target class in Content Browser."))
-						.Visibility(this, &SDataAssetSheetEditor::GetEmptyMessageVisibility)
-				]
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						.HAlign(HAlign_Center)
+						.Padding(0.0f, 8.0f, 0.0f, 0.0f)
+						[
+							SNew(STextBlock)
+								.Text(LOCTEXT("Loading", "Loading assets..."))
+						]
+					]
 			]
 
-			// 右：詳細パネル / Right: details panel
-			+ SSplitter::Slot()
-			.Value(0.4f)
+			// アセット0件メッセージ / Empty state message
+			+ SOverlay::Slot()
+			.HAlign(HAlign_Center)
+			.VAlign(VAlign_Center)
 			[
-				DetailsView.ToSharedRef()
+				SNew(STextBlock)
+					.Text(this, &SDataAssetSheetEditor::GetEmptyMessageText)
+					.Visibility(this, &SDataAssetSheetEditor::GetEmptyMessageVisibility)
 			]
-		]
+		];
+
+	// 詳細パネルウィジェット / Details panel widget
+	DetailsWidget = DetailsView;
+
+	// ChildSlotは空（タブから参照される）/ ChildSlot empty — widgets accessed via GetTableWidget/GetDetailsWidget
+	ChildSlot
+	[
+		SNullWidget::NullWidget
 	];
 
 	// AssetRegistryイベント登録 / Register asset registry events
 	RegisterAssetRegistryEvents();
+
+	// Hot Reload対策 / Register hot reload handler to rebuild with fresh FProperty pointers
+	FCoreUObjectDelegates::ReloadCompleteDelegate.AddSP(this, &SDataAssetSheetEditor::OnReloadComplete);
 
 	// 初期テーブル構築 / Initial table build
 	RebuildTable();
@@ -286,12 +352,28 @@ void SDataAssetSheetEditor::Construct(const FArguments& InArgs)
 
 SDataAssetSheetEditor::~SDataAssetSheetEditor()
 {
+	FCoreUObjectDelegates::ReloadCompleteDelegate.RemoveAll(this);
 	UnregisterAssetRegistryEvents();
 
 	if (Model.IsValid())
 	{
 		Model->CancelLoading();
 	}
+}
+
+void SDataAssetSheetEditor::OnSettingsChanged()
+{
+	RebuildTable();
+}
+
+TSharedRef<SWidget> SDataAssetSheetEditor::GetTableWidget() const
+{
+	return TableWidget.ToSharedRef();
+}
+
+TSharedRef<SWidget> SDataAssetSheetEditor::GetDetailsWidget() const
+{
+	return DetailsWidget.ToSharedRef();
 }
 
 void SDataAssetSheetEditor::RebuildTable()
@@ -305,8 +387,8 @@ void SDataAssetSheetEditor::RebuildTable()
 
 	UClass* TargetClass = Sheet->TargetClass;
 
-	// データ取得（ロードなし）/ Discover assets without loading
-	Model->DiscoverAssets(TargetClass);
+	// 登録設定に基づいてアセットを検索 / Discover assets based on registration settings
+	Model->DiscoverAssets(TargetClass, Sheet->bShowAll, Sheet->ManualAssets, Sheet->RegisteredCollections);
 	Model->BuildColumnList(TargetClass);
 
 	// ヘッダー行更新 / Rebuild header
@@ -349,7 +431,9 @@ void SDataAssetSheetEditor::RebuildHeaderRow()
 
 TSharedRef<ITableRow> SDataAssetSheetEditor::OnGenerateRow(TSharedPtr<FDataAssetRowData> InRowData, const TSharedRef<STableViewBase>& OwnerTable)
 {
-	return SNew(SDataAssetSheetRow, OwnerTable, InRowData, Model);
+	const int32 Index = Model->GetFilteredRowDataList().IndexOfByKey(InRowData);
+	return SNew(SDataAssetSheetRow, OwnerTable, InRowData, Model)
+		.IndexInList(Index);
 }
 
 void SDataAssetSheetEditor::OnSelectionChanged(TSharedPtr<FDataAssetRowData> InRowData, ESelectInfo::Type SelectInfo)
@@ -421,6 +505,16 @@ EVisibility SDataAssetSheetEditor::GetEmptyMessageVisibility() const
 	return (Model->GetLoadingState() == EDataAssetSheetLoadingState::Loaded && Model->GetRowDataList().IsEmpty())
 		? EVisibility::Visible
 		: EVisibility::Collapsed;
+}
+
+FText SDataAssetSheetEditor::GetEmptyMessageText() const
+{
+	UDataAssetSheet* Sheet = DataAssetSheet.Get();
+	if (Sheet && !Sheet->bShowAll)
+	{
+		return LOCTEXT("NoAssetsSettings", "No assets registered.\nUse the Settings tab to add assets, or enable Show All.");
+	}
+	return LOCTEXT("NoAssets", "No assets found. Create DataAssets of the target class in Content Browser.");
 }
 
 void SDataAssetSheetEditor::OnDetailsPropertyChanged(const FPropertyChangedEvent& PropertyChangedEvent)
@@ -718,6 +812,12 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 	return FReply::Handled();
 }
 
+void SDataAssetSheetEditor::OnReloadComplete(EReloadCompleteReason Reason)
+{
+	// Hot Reload後はFProperty*が無効になるためテーブルを完全再構築 / Rebuild after hot reload to get fresh FProperty pointers
+	RebuildTable();
+}
+
 void SDataAssetSheetEditor::RegisterAssetRegistryEvents()
 {
 	IAssetRegistry& AssetRegistry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
@@ -762,6 +862,13 @@ void SDataAssetSheetEditor::OnAssetAdded(const FAssetData& AssetData)
 		return;
 	}
 
+	// bShowAll=false の場合は自動追加しない / Do not auto-add when bShowAll is false
+	UDataAssetSheet* Sheet = DataAssetSheet.Get();
+	if (Sheet && !Sheet->bShowAll)
+	{
+		return;
+	}
+
 	// 新しいRowDataを追加 / Add new row data
 	TSharedPtr<FDataAssetRowData> NewRowData = MakeShared<FDataAssetRowData>();
 	NewRowData->AssetPath = AssetData.GetSoftObjectPath();
@@ -790,6 +897,17 @@ void SDataAssetSheetEditor::OnAssetRemoved(const FAssetData& AssetData)
 	}
 
 	FSoftObjectPath RemovedPath = AssetData.GetSoftObjectPath();
+
+	// ManualAssetsリストからも自動除外 / Auto-remove from ManualAssets list
+	UDataAssetSheet* Sheet = DataAssetSheet.Get();
+	if (Sheet)
+	{
+		Sheet->ManualAssets.RemoveAll([&RemovedPath](const TSoftObjectPtr<UDataAsset>& SoftPtr)
+		{
+			return SoftPtr.ToSoftObjectPath() == RemovedPath;
+		});
+	}
+
 	TArray<TSharedPtr<FDataAssetRowData>>& RowDataList = Model->GetMutableRowDataList();
 
 	RowDataList.RemoveAll([&RemovedPath](const TSharedPtr<FDataAssetRowData>& RowData)

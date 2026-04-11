@@ -31,6 +31,7 @@ public class DataAssetSheetEditor : ModuleRules
 				"ContentBrowser",
 				"DesktopPlatform",
 				"AssetDefinition",
+				"CollectionManager",
 			}
 		);
 	}
