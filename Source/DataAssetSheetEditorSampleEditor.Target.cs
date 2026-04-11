@@ -3,9 +3,9 @@
 using UnrealBuildTool;
 using System.Collections.Generic;
 
-public class DataAssetSheetEditorEditorTarget : TargetRules
+public class DataAssetSheetEditorSampleEditorTarget : TargetRules
 {
-	public DataAssetSheetEditorEditorTarget(TargetInfo Target) : base(Target)
+	public DataAssetSheetEditorSampleEditorTarget(TargetInfo Target) : base(Target)
 	{
 		Type = TargetType.Editor;
 		DefaultBuildSettings = BuildSettingsVersion.Latest;
