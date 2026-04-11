@@ -32,6 +32,9 @@ public class DataAssetSheetEditor : ModuleRules
 				"DesktopPlatform",
 				"AssetDefinition",
 				"CollectionManager",
+				"AssetTools",
+				"ApplicationCore",
+				"Json",
 			}
 		);
 	}

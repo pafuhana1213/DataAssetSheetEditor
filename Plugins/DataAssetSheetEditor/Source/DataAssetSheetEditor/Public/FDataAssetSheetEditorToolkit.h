@@ -29,6 +29,10 @@ public:
 	virtual void UnregisterTabSpawners(const TSharedRef<FTabManager>& InTabManager) override;
 
 private:
+	// ツールバー拡張 / Extend the toolbar with custom buttons
+	void ExtendToolbar(TSharedPtr<FExtender> Extender);
+	void FillToolbar(FToolBarBuilder& ToolbarBuilder);
+
 	// Target Classハイパーリンククリック / Navigate to the target class definition
 	void OnTargetClassHyperlinkClicked();
 

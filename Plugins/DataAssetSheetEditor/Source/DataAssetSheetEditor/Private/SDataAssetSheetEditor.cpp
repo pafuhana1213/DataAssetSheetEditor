@@ -13,6 +13,7 @@
 #include "Widgets/Images/SThrobber.h"
 #include "Widgets/Input/SHyperlink.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Input/SComboButton.h"
 #include "UObject/Package.h"
 #include "Widgets/SNullWidget.h"
 #include "Subsystems/AssetEditorSubsystem.h"
@@ -25,6 +26,16 @@
 #include "DesktopPlatformModule.h"
 #include "Misc/FileHelper.h"
 #include "HAL/PlatformApplicationMisc.h"
+#include "IAssetTools.h"
+#include "AssetToolsModule.h"
+#include "Factories/DataAssetFactory.h"
+#include "ObjectTools.h"
+#include "FileHelpers.h"
+#include "Editor/EditorEngine.h"
+#include "Framework/Commands/GenericCommands.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
+#include "Dom/JsonObject.h"
 
 #define LOCTEXT_NAMESPACE "SDataAssetSheetEditor"
 
@@ -182,44 +193,6 @@ public:
 		}
 	}
 
-	virtual FReply OnMouseButtonUp(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override
-	{
-		// 右クリックでコンテキストメニュー / Right-click context menu
-		if (MouseEvent.GetEffectingButton() == EKeys::RightMouseButton && RowData->IsLoaded())
-		{
-			FMenuBuilder MenuBuilder(true, nullptr);
-			MenuBuilder.AddMenuEntry(
-				LOCTEXT("BrowseToAsset", "Browse to Asset"),
-				LOCTEXT("BrowseToAssetTooltip", "Show this asset in the Content Browser"),
-				FSlateIcon(),
-				FUIAction(FExecuteAction::CreateLambda([this]()
-				{
-					if (RowData->IsLoaded())
-					{
-						TArray<FAssetData> AssetDatas;
-						AssetDatas.Add(FAssetData(RowData->Asset.Get()));
-						FContentBrowserModule& ContentBrowserModule = FModuleManager::LoadModuleChecked<FContentBrowserModule>("ContentBrowser");
-						ContentBrowserModule.Get().SyncBrowserToAssets(AssetDatas);
-					}
-				}))
-			);
-
-			FWidgetPath WidgetPath;
-			FSlateApplication::Get().GeneratePathToWidgetChecked(AsShared(), WidgetPath);
-			FSlateApplication::Get().PushMenu(
-				AsShared(),
-				WidgetPath,
-				MenuBuilder.MakeWidget(),
-				MouseEvent.GetScreenSpacePosition(),
-				FPopupTransitionEffect::ContextMenu
-			);
-
-			return FReply::Handled();
-		}
-
-		return SMultiColumnTableRow::OnMouseButtonUp(MyGeometry, MouseEvent);
-	}
-
 private:
 	TSharedPtr<FDataAssetRowData> RowData;
 	TSharedPtr<FDataAssetSheetModel> Model;
@@ -253,6 +226,7 @@ void SDataAssetSheetEditor::Construct(const FArguments& InArgs)
 		.ListItemsSource(&Model->GetFilteredRowDataList())
 		.OnGenerateRow(this, &SDataAssetSheetEditor::OnGenerateRow)
 		.OnSelectionChanged(this, &SDataAssetSheetEditor::OnSelectionChanged)
+		.OnContextMenuOpening(this, &SDataAssetSheetEditor::OnConstructContextMenu)
 		.SelectionMode(ESelectionMode::Multi)
 		.HeaderRow(HeaderRow);
 
@@ -287,6 +261,23 @@ void SDataAssetSheetEditor::Construct(const FArguments& InArgs)
 				SNew(SButton)
 					.Text(LOCTEXT("ImportCSV", "Import CSV"))
 					.OnClicked(this, &SDataAssetSheetEditor::OnImportCSVClicked)
+			]
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.Padding(4.0f, 0.0f, 0.0f, 0.0f)
+			[
+				SNew(SComboButton)
+					.ButtonContent()
+					[
+						SNew(STextBlock)
+							.Text(LOCTEXT("Columns", "Columns"))
+					]
+					.OnGetMenuContent_Lambda([this]() -> TSharedRef<SWidget>
+					{
+						TSharedPtr<SWidget> Menu = OnConstructHeaderContextMenu();
+						return Menu.IsValid() ? Menu.ToSharedRef() : SNullWidget::NullWidget;
+					})
+					.ToolTipText(LOCTEXT("ColumnsTooltip", "Show/Hide columns"))
 			]
 			+ SHorizontalBox::Slot()
 			.FillWidth(1.0f)
@@ -387,12 +378,18 @@ void SDataAssetSheetEditor::Construct(const FArguments& InArgs)
 	// Hot Reload対策 / Register hot reload handler to rebuild with fresh FProperty pointers
 	FCoreUObjectDelegates::ReloadCompleteDelegate.AddSP(this, &SDataAssetSheetEditor::OnReloadComplete);
 
+	// レイアウトデータ読み込み / Load layout data (column widths, hidden columns)
+	LoadLayoutData();
+
 	// 初期テーブル構築 / Initial table build
 	RebuildTable();
 }
 
 SDataAssetSheetEditor::~SDataAssetSheetEditor()
 {
+	// レイアウトデータ保存 / Save layout data on close
+	SaveLayoutData();
+
 	FCoreUObjectDelegates::ReloadCompleteDelegate.RemoveAll(this);
 	UnregisterAssetRegistryEvents();
 
@@ -452,26 +449,84 @@ void SDataAssetSheetEditor::RebuildHeaderRow()
 {
 	HeaderRow->ClearColumns();
 
+	// レイアウトデータからカラム幅を取得するヘルパー / Helper to get stored column width
+	TSharedPtr<FJsonObject> ColumnWidthsJson;
+	if (LayoutData.IsValid() && LayoutData->HasField(TEXT("ColumnWidths")))
+	{
+		ColumnWidthsJson = LayoutData->GetObjectField(TEXT("ColumnWidths"));
+	}
+
+	auto GetStoredWidth = [&ColumnWidthsJson](const FName& ColName) -> TOptional<float>
+	{
+		if (ColumnWidthsJson.IsValid())
+		{
+			const FString ColNameStr = ColName.ToString();
+			if (ColumnWidthsJson->HasField(ColNameStr))
+			{
+				return ColumnWidthsJson->GetNumberField(ColNameStr);
+			}
+		}
+		return {};
+	};
+
 	// アセット名列（常に先頭）/ Asset name column (always first)
-	HeaderRow->AddColumn(
-		SHeaderRow::Column("AssetName")
-		.DefaultLabel(LOCTEXT("AssetName", "Asset Name"))
-		.SortMode(TAttribute<EColumnSortMode::Type>::CreateSP(this, &SDataAssetSheetEditor::GetSortModeForColumn, FName("AssetName")))
-		.OnSort(FOnSortModeChanged::CreateSP(this, &SDataAssetSheetEditor::OnSortModeChanged))
-		.FillWidth(1.0f)
-	);
+	{
+		FName AssetNameCol("AssetName");
+		SHeaderRow::FColumn::FArguments AssetNameColArgs = SHeaderRow::Column(AssetNameCol)
+			.DefaultLabel(LOCTEXT("AssetName", "Asset Name"))
+			.SortMode(TAttribute<EColumnSortMode::Type>::CreateSP(this, &SDataAssetSheetEditor::GetSortModeForColumn, AssetNameCol))
+			.OnSort(FOnSortModeChanged::CreateSP(this, &SDataAssetSheetEditor::OnSortModeChanged))
+			.OnWidthChanged(FOnWidthChanged::CreateSP(this, &SDataAssetSheetEditor::OnColumnResized, AssetNameCol));
+
+		TOptional<float> StoredWidth = GetStoredWidth(AssetNameCol);
+		if (StoredWidth.IsSet())
+		{
+			AssetNameColArgs.ManualWidth(StoredWidth.GetValue());
+		}
+		else
+		{
+			AssetNameColArgs.FillWidth(1.0f);
+		}
+
+		HeaderRow->AddColumn(AssetNameColArgs);
+	}
 
 	// プロパティ列を動的に追加 / Add property columns dynamically
 	for (FProperty* Prop : Model->GetColumnProperties())
 	{
 		FName ColName = Prop->GetFName();
-		HeaderRow->AddColumn(
-			SHeaderRow::Column(ColName)
+
+		// 非表示カラムはスキップ / Skip hidden columns
+		if (HiddenColumns.Contains(ColName))
+		{
+			continue;
+		}
+
+		// ツールチップ: UPROPERTYのToolTipメタデータがあればそれを、なければ型名を表示
+		FText ColumnTooltip = Prop->GetToolTipText();
+		if (ColumnTooltip.IsEmpty())
+		{
+			ColumnTooltip = FText::FromString(Prop->GetCPPType());
+		}
+
+		SHeaderRow::FColumn::FArguments ColArgs = SHeaderRow::Column(ColName)
 			.DefaultLabel(FText::FromName(ColName))
+			.ToolTipText(ColumnTooltip)
 			.SortMode(TAttribute<EColumnSortMode::Type>::CreateSP(this, &SDataAssetSheetEditor::GetSortModeForColumn, ColName))
 			.OnSort(FOnSortModeChanged::CreateSP(this, &SDataAssetSheetEditor::OnSortModeChanged))
-			.FillWidth(1.0f)
-		);
+			.OnWidthChanged(FOnWidthChanged::CreateSP(this, &SDataAssetSheetEditor::OnColumnResized, ColName));
+
+		TOptional<float> StoredWidth = GetStoredWidth(ColName);
+		if (StoredWidth.IsSet())
+		{
+			ColArgs.ManualWidth(StoredWidth.GetValue());
+		}
+		else
+		{
+			ColArgs.FillWidth(1.0f);
+		}
+
+		HeaderRow->AddColumn(ColArgs);
 	}
 }
 
@@ -881,6 +936,603 @@ void SDataAssetSheetEditor::OnReloadComplete(EReloadCompleteReason Reason)
 {
 	// Hot Reload後はFProperty*が無効になるためテーブルを完全再構築 / Rebuild after hot reload to get fresh FProperty pointers
 	RebuildTable();
+}
+
+void SDataAssetSheetEditor::BindCommands(const TSharedRef<FUICommandList>& InCommandList)
+{
+	CommandList = InCommandList;
+
+	CommandList->MapAction(
+		FGenericCommands::Get().Copy,
+		FExecuteAction::CreateSP(this, &SDataAssetSheetEditor::CopySelectedRows),
+		FCanExecuteAction::CreateSP(this, &SDataAssetSheetEditor::HasSelectedLoadedAsset)
+	);
+
+	CommandList->MapAction(
+		FGenericCommands::Get().Paste,
+		FExecuteAction::CreateSP(this, &SDataAssetSheetEditor::PasteOnSelectedRows),
+		FCanExecuteAction::CreateSP(this, &SDataAssetSheetEditor::CanPaste)
+	);
+
+	CommandList->MapAction(
+		FGenericCommands::Get().Duplicate,
+		FExecuteAction::CreateSP(this, &SDataAssetSheetEditor::DuplicateSelectedAsset),
+		FCanExecuteAction::CreateSP(this, &SDataAssetSheetEditor::CanDeleteSelectedAsset)
+	);
+
+	CommandList->MapAction(
+		FGenericCommands::Get().Delete,
+		FExecuteAction::CreateSP(this, &SDataAssetSheetEditor::DeleteSelectedAsset),
+		FCanExecuteAction::CreateSP(this, &SDataAssetSheetEditor::CanDeleteSelectedAsset)
+	);
+}
+
+TSharedPtr<SWidget> SDataAssetSheetEditor::OnConstructContextMenu()
+{
+	if (!HasSelectedLoadedAsset())
+	{
+		return nullptr;
+	}
+
+	FMenuBuilder MenuBuilder(true, CommandList);
+
+	MenuBuilder.BeginSection("AssetActions", LOCTEXT("AssetActionsSection", "Asset Actions"));
+	{
+		MenuBuilder.AddMenuEntry(
+			LOCTEXT("BrowseToAsset", "Browse to Asset"),
+			LOCTEXT("BrowseToAssetTooltip", "Show this asset in the Content Browser"),
+			FSlateIcon(FAppStyle::GetAppStyleSetName(), "SystemWideCommands.FindInContentBrowser"),
+			FUIAction(
+				FExecuteAction::CreateSP(this, &SDataAssetSheetEditor::BrowseToSelectedAsset),
+				FCanExecuteAction::CreateSP(this, &SDataAssetSheetEditor::HasSelectedLoadedAsset)
+			)
+		);
+
+		MenuBuilder.AddMenuEntry(
+			LOCTEXT("SaveAsset", "Save Asset"),
+			LOCTEXT("SaveAssetTooltip", "Save the selected asset"),
+			FSlateIcon(FAppStyle::GetAppStyleSetName(), "AssetEditor.SaveAsset"),
+			FUIAction(
+				FExecuteAction::CreateLambda([this]()
+				{
+					TArray<TSharedPtr<FDataAssetRowData>> SelectedItems = AssetListView->GetSelectedItems();
+					TArray<UPackage*> PackagesToSave;
+					for (const TSharedPtr<FDataAssetRowData>& Item : SelectedItems)
+					{
+						if (Item.IsValid() && Item->IsLoaded())
+						{
+							UPackage* Package = Item->Asset->GetOutermost();
+							if (Package && Package->IsDirty())
+							{
+								PackagesToSave.Add(Package);
+							}
+						}
+					}
+					if (PackagesToSave.Num() > 0)
+					{
+						UEditorLoadingAndSavingUtils::SavePackages(PackagesToSave, true);
+					}
+				}),
+				FCanExecuteAction::CreateSP(this, &SDataAssetSheetEditor::HasSelectedLoadedAsset)
+			)
+		);
+	}
+	MenuBuilder.EndSection();
+
+	MenuBuilder.BeginSection("EditOperations", LOCTEXT("EditOperationsSection", "Edit"));
+	{
+		MenuBuilder.AddMenuEntry(FGenericCommands::Get().Copy);
+		MenuBuilder.AddMenuEntry(FGenericCommands::Get().Paste);
+	}
+	MenuBuilder.EndSection();
+
+	MenuBuilder.BeginSection("AssetOperations", LOCTEXT("AssetOperationsSection", "Operations"));
+	{
+		MenuBuilder.AddMenuEntry(FGenericCommands::Get().Duplicate);
+		MenuBuilder.AddMenuEntry(FGenericCommands::Get().Delete);
+	}
+	MenuBuilder.EndSection();
+
+	MenuBuilder.BeginSection("References", LOCTEXT("ReferencesSection", "References"));
+	{
+		MenuBuilder.AddMenuEntry(
+			LOCTEXT("FindReferences", "Find References"),
+			LOCTEXT("FindReferencesTooltip", "Open the Reference Viewer for this asset"),
+			FSlateIcon(),
+			FUIAction(
+				FExecuteAction::CreateSP(this, &SDataAssetSheetEditor::FindReferencesForSelectedAsset),
+				FCanExecuteAction::CreateSP(this, &SDataAssetSheetEditor::HasSelectedLoadedAsset)
+			)
+		);
+	}
+	MenuBuilder.EndSection();
+
+	return MenuBuilder.MakeWidget();
+}
+
+void SDataAssetSheetEditor::BrowseToSelectedAsset()
+{
+	TArray<TSharedPtr<FDataAssetRowData>> SelectedItems = AssetListView->GetSelectedItems();
+	TArray<FAssetData> AssetDatas;
+	for (const TSharedPtr<FDataAssetRowData>& Item : SelectedItems)
+	{
+		if (Item.IsValid() && Item->IsLoaded())
+		{
+			AssetDatas.Add(FAssetData(Item->Asset.Get()));
+		}
+	}
+
+	if (AssetDatas.Num() > 0)
+	{
+		FContentBrowserModule& ContentBrowserModule = FModuleManager::LoadModuleChecked<FContentBrowserModule>("ContentBrowser");
+		ContentBrowserModule.Get().SyncBrowserToAssets(AssetDatas);
+	}
+}
+
+bool SDataAssetSheetEditor::HasSelectedLoadedAsset() const
+{
+	TArray<TSharedPtr<FDataAssetRowData>> SelectedItems = AssetListView->GetSelectedItems();
+	for (const TSharedPtr<FDataAssetRowData>& Item : SelectedItems)
+	{
+		if (Item.IsValid() && Item->IsLoaded())
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+void SDataAssetSheetEditor::CreateNewAsset()
+{
+	UDataAssetSheet* Sheet = DataAssetSheet.Get();
+	if (!Sheet || !Sheet->TargetClass)
+	{
+		return;
+	}
+
+	// UDataAssetFactoryを生成し、TargetClassを事前設定 / Create factory with preset target class
+	UDataAssetFactory* Factory = NewObject<UDataAssetFactory>();
+	Factory->DataAssetClass = Sheet->TargetClass;
+
+	// ダイアログ付きでアセット作成（クラス選択ダイアログはスキップ）
+	// Create asset with save dialog, skip class picker since TargetClass is already known
+	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+	FString DefaultPath = FPackageName::GetLongPackagePath(Sheet->GetPathName());
+	AssetTools.CreateAssetWithDialog(Sheet->TargetClass->GetName(), DefaultPath, Sheet->TargetClass, Factory, NAME_None, /*bCallConfigureProperties=*/ false);
+	// OnAssetAddedフックで自動的にテーブル更新される / Table updates via OnAssetAdded hook
+}
+
+void SDataAssetSheetEditor::DeleteSelectedAsset()
+{
+	// 単一アセットのみ削除可能 / Single asset deletion only
+	TArray<TSharedPtr<FDataAssetRowData>> SelectedItems = AssetListView->GetSelectedItems();
+	if (SelectedItems.Num() != 1 || !SelectedItems[0].IsValid() || !SelectedItems[0]->IsLoaded())
+	{
+		return;
+	}
+
+	TArray<FAssetData> AssetsToDelete;
+	AssetsToDelete.Add(FAssetData(SelectedItems[0]->Asset.Get()));
+
+	// 確認ダイアログ + 参照チェック付きで削除 / Delete with confirmation dialog and reference check
+	ObjectTools::DeleteAssets(AssetsToDelete, true);
+	// OnAssetRemovedフックで自動的にテーブル更新される / Table updates via OnAssetRemoved hook
+}
+
+bool SDataAssetSheetEditor::CanDeleteSelectedAsset() const
+{
+	TArray<TSharedPtr<FDataAssetRowData>> SelectedItems = AssetListView->GetSelectedItems();
+	return SelectedItems.Num() == 1 && SelectedItems[0].IsValid() && SelectedItems[0]->IsLoaded();
+}
+
+void SDataAssetSheetEditor::DuplicateSelectedAsset()
+{
+	TArray<TSharedPtr<FDataAssetRowData>> SelectedItems = AssetListView->GetSelectedItems();
+	if (SelectedItems.Num() != 1 || !SelectedItems[0].IsValid() || !SelectedItems[0]->IsLoaded())
+	{
+		return;
+	}
+
+	UObject* OriginalAsset = SelectedItems[0]->Asset.Get();
+	FString PackagePath = FPackageName::GetLongPackagePath(OriginalAsset->GetPathName());
+	FString AssetName = OriginalAsset->GetName() + TEXT("_Copy");
+
+	// ダイアログ付きで複製 / Duplicate with dialog
+	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+	AssetTools.DuplicateAssetWithDialog(AssetName, PackagePath, OriginalAsset);
+	// OnAssetAddedフックで自動的にテーブル更新される / Table updates via OnAssetAdded hook
+}
+
+void SDataAssetSheetEditor::SaveAllModifiedAssets()
+{
+	TArray<UPackage*> DirtyPackages;
+	for (const TSharedPtr<FDataAssetRowData>& RowData : Model->GetRowDataList())
+	{
+		if (RowData.IsValid() && RowData->IsLoaded())
+		{
+			UPackage* Package = RowData->Asset->GetOutermost();
+			if (Package && Package->IsDirty())
+			{
+				DirtyPackages.Add(Package);
+			}
+		}
+	}
+
+	if (DirtyPackages.Num() > 0)
+	{
+		UEditorLoadingAndSavingUtils::SavePackages(DirtyPackages, true);
+	}
+}
+
+bool SDataAssetSheetEditor::HasModifiedAssets() const
+{
+	for (const TSharedPtr<FDataAssetRowData>& RowData : Model->GetRowDataList())
+	{
+		if (RowData.IsValid() && RowData->IsLoaded())
+		{
+			UPackage* Package = RowData->Asset->GetOutermost();
+			if (Package && Package->IsDirty())
+			{
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+void SDataAssetSheetEditor::FindReferencesForSelectedAsset()
+{
+	TArray<TSharedPtr<FDataAssetRowData>> SelectedItems = AssetListView->GetSelectedItems();
+	if (SelectedItems.Num() == 0)
+	{
+		return;
+	}
+
+	TArray<FAssetIdentifier> AssetIdentifiers;
+	for (const TSharedPtr<FDataAssetRowData>& Item : SelectedItems)
+	{
+		if (Item.IsValid() && Item->IsLoaded())
+		{
+			FName PackageName = Item->Asset->GetOutermost()->GetFName();
+			AssetIdentifiers.Add(FAssetIdentifier(PackageName));
+		}
+	}
+
+	if (AssetIdentifiers.Num() > 0)
+	{
+		FEditorDelegates::OnOpenReferenceViewer.Broadcast(AssetIdentifiers, FReferenceViewerParams());
+	}
+}
+
+void SDataAssetSheetEditor::CopySelectedRows()
+{
+	TArray<TSharedPtr<FDataAssetRowData>> SelectedItems = AssetListView->GetSelectedItems();
+	if (SelectedItems.Num() == 0 || !Model.IsValid())
+	{
+		return;
+	}
+
+	const TArray<FProperty*>& ColumnProperties = Model->GetColumnProperties();
+	FString ClipboardContent;
+
+	// ヘッダー行 / Header row
+	ClipboardContent += TEXT("AssetName");
+	for (FProperty* Prop : ColumnProperties)
+	{
+		ClipboardContent += TEXT("\t");
+		ClipboardContent += Prop->GetName();
+	}
+	ClipboardContent += TEXT("\n");
+
+	// データ行 / Data rows
+	for (const TSharedPtr<FDataAssetRowData>& Item : SelectedItems)
+	{
+		if (!Item.IsValid() || !Item->IsLoaded())
+		{
+			continue;
+		}
+
+		ClipboardContent += Item->AssetName;
+
+		for (FProperty* Prop : ColumnProperties)
+		{
+			ClipboardContent += TEXT("\t");
+			FString ValueText = Model->GetPropertyValueText(Item->Asset.Get(), Prop);
+			// タブと改行をエスケープ / Escape tabs and newlines
+			ValueText.ReplaceInline(TEXT("\t"), TEXT("\\t"));
+			ValueText.ReplaceInline(TEXT("\n"), TEXT("\\n"));
+			ValueText.ReplaceInline(TEXT("\r"), TEXT(""));
+			ClipboardContent += ValueText;
+		}
+		ClipboardContent += TEXT("\n");
+	}
+
+	FPlatformApplicationMisc::ClipboardCopy(*ClipboardContent);
+}
+
+void SDataAssetSheetEditor::PasteOnSelectedRows()
+{
+	TArray<TSharedPtr<FDataAssetRowData>> SelectedItems = AssetListView->GetSelectedItems();
+	if (SelectedItems.Num() == 0 || !Model.IsValid())
+	{
+		return;
+	}
+
+	// クリップボードからTSVを読み取り / Read TSV from clipboard
+	FString ClipboardContent;
+	FPlatformApplicationMisc::ClipboardPaste(ClipboardContent);
+	if (ClipboardContent.IsEmpty())
+	{
+		return;
+	}
+
+	// 行分割 / Split into lines
+	TArray<FString> Lines;
+	ClipboardContent.ParseIntoArray(Lines, TEXT("\n"), false);
+	if (Lines.Num() < 2)
+	{
+		return;
+	}
+
+	// ヘッダー行からプロパティをマッピング / Map headers to properties
+	TArray<FString> Headers;
+	Lines[0].ParseIntoArray(Headers, TEXT("\t"), false);
+	if (Headers.Num() < 2 || Headers[0] != TEXT("AssetName"))
+	{
+		UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("Invalid clipboard data: header must start with 'AssetName'"));
+		return;
+	}
+
+	TArray<FProperty*> PasteProperties;
+	for (int32 i = 1; i < Headers.Num(); ++i)
+	{
+		FProperty* FoundProp = nullptr;
+		for (FProperty* Prop : Model->GetColumnProperties())
+		{
+			if (Prop->GetName() == Headers[i])
+			{
+				FoundProp = Prop;
+				break;
+			}
+		}
+		PasteProperties.Add(FoundProp);
+	}
+
+	// Undo対応 / Undo support
+	FScopedTransaction Transaction(LOCTEXT("PasteRowData", "Paste Row Data"));
+
+	int32 SuccessCount = 0;
+
+	// データ行を適用 / Apply data rows
+	for (int32 LineIndex = 1; LineIndex < Lines.Num(); ++LineIndex)
+	{
+		FString& Line = Lines[LineIndex];
+		Line.TrimEndInline();
+		if (Line.IsEmpty())
+		{
+			continue;
+		}
+
+		TArray<FString> Fields;
+		Line.ParseIntoArray(Fields, TEXT("\t"), false);
+		if (Fields.IsEmpty())
+		{
+			continue;
+		}
+
+		FString AssetName = Fields[0];
+
+		// アセット名で選択行を検索 / Find matching selected asset
+		TSharedPtr<FDataAssetRowData> TargetRow;
+		for (const TSharedPtr<FDataAssetRowData>& Item : SelectedItems)
+		{
+			if (Item.IsValid() && Item->IsLoaded() && Item->AssetName == AssetName)
+			{
+				TargetRow = Item;
+				break;
+			}
+		}
+
+		// 選択行にマッチしない場合、選択行の順番で適用 / If no name match, apply by selection order
+		if (!TargetRow.IsValid())
+		{
+			int32 SelectionIndex = LineIndex - 1;
+			if (SelectionIndex < SelectedItems.Num())
+			{
+				TargetRow = SelectedItems[SelectionIndex];
+			}
+		}
+
+		if (!TargetRow.IsValid() || !TargetRow->IsLoaded())
+		{
+			continue;
+		}
+
+		UDataAsset* Asset = TargetRow->Asset.Get();
+		Asset->Modify();
+
+		for (int32 PropIndex = 0; PropIndex < PasteProperties.Num(); ++PropIndex)
+		{
+			int32 FieldIndex = PropIndex + 1;
+			if (FieldIndex >= Fields.Num() || !PasteProperties[PropIndex])
+			{
+				continue;
+			}
+
+			FProperty* Prop = PasteProperties[PropIndex];
+			void* ValuePtr = Prop->ContainerPtrToValuePtr<void>(Asset);
+			FString ValueStr = Fields[FieldIndex];
+
+			// エスケープを復元 / Unescape tabs and newlines
+			ValueStr.ReplaceInline(TEXT("\\t"), TEXT("\t"));
+			ValueStr.ReplaceInline(TEXT("\\n"), TEXT("\n"));
+
+			if (FTextProperty* TextProp = CastField<FTextProperty>(Prop))
+			{
+				TextProp->SetPropertyValue(ValuePtr, FText::FromString(ValueStr));
+			}
+			else
+			{
+				Prop->ImportText_Direct(*ValueStr, ValuePtr, Asset, PPF_None);
+			}
+		}
+
+		Asset->MarkPackageDirty();
+		++SuccessCount;
+	}
+
+	if (SuccessCount > 0)
+	{
+		// テーブル更新 / Refresh table
+		AssetListView->RequestListRefresh();
+	}
+
+	UE_LOG(LogDataAssetSheetEditor, Log, TEXT("Pasted data to %d asset(s)"), SuccessCount);
+}
+
+bool SDataAssetSheetEditor::CanPaste() const
+{
+	if (!HasSelectedLoadedAsset())
+	{
+		return false;
+	}
+
+	FString ClipboardContent;
+	FPlatformApplicationMisc::ClipboardPaste(ClipboardContent);
+	return !ClipboardContent.IsEmpty();
+}
+
+void SDataAssetSheetEditor::LoadLayoutData()
+{
+	LayoutData.Reset();
+	HiddenColumns.Empty();
+
+	UDataAssetSheet* Sheet = DataAssetSheet.Get();
+	if (!Sheet)
+	{
+		return;
+	}
+
+	const FString LayoutFilename = FPaths::ProjectSavedDir() / TEXT("AssetData") / TEXT("DataAssetSheetLayout") / Sheet->GetName() + TEXT(".json");
+
+	FString JsonText;
+	if (FFileHelper::LoadFileToString(JsonText, *LayoutFilename))
+	{
+		TSharedRef<TJsonReader<TCHAR>> JsonReader = TJsonReaderFactory<TCHAR>::Create(JsonText);
+		FJsonSerializer::Deserialize(JsonReader, LayoutData);
+	}
+
+	// HiddenColumnsを復元 / Restore hidden columns
+	if (LayoutData.IsValid() && LayoutData->HasField(TEXT("HiddenColumns")))
+	{
+		const TArray<TSharedPtr<FJsonValue>>& HiddenArray = LayoutData->GetArrayField(TEXT("HiddenColumns"));
+		for (const TSharedPtr<FJsonValue>& Value : HiddenArray)
+		{
+			HiddenColumns.Add(FName(*Value->AsString()));
+		}
+	}
+}
+
+void SDataAssetSheetEditor::SaveLayoutData()
+{
+	UDataAssetSheet* Sheet = DataAssetSheet.Get();
+	if (!Sheet)
+	{
+		return;
+	}
+
+	if (!LayoutData.IsValid())
+	{
+		LayoutData = MakeShareable(new FJsonObject());
+	}
+
+	// HiddenColumnsを保存 / Save hidden columns
+	TArray<TSharedPtr<FJsonValue>> HiddenArray;
+	for (const FName& ColName : HiddenColumns)
+	{
+		HiddenArray.Add(MakeShareable(new FJsonValueString(ColName.ToString())));
+	}
+	LayoutData->SetArrayField(TEXT("HiddenColumns"), HiddenArray);
+
+	const FString LayoutFilename = FPaths::ProjectSavedDir() / TEXT("AssetData") / TEXT("DataAssetSheetLayout") / Sheet->GetName() + TEXT(".json");
+
+	FString JsonText;
+	TSharedRef<TJsonWriter<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>> JsonWriter = TJsonWriterFactory<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>::Create(&JsonText);
+	if (FJsonSerializer::Serialize(LayoutData.ToSharedRef(), JsonWriter))
+	{
+		FFileHelper::SaveStringToFile(JsonText, *LayoutFilename);
+	}
+}
+
+void SDataAssetSheetEditor::OnColumnResized(const float NewWidth, FName ColumnId)
+{
+	if (!LayoutData.IsValid())
+	{
+		LayoutData = MakeShareable(new FJsonObject());
+	}
+
+	TSharedPtr<FJsonObject> ColumnWidthsJson;
+	if (!LayoutData->HasField(TEXT("ColumnWidths")))
+	{
+		ColumnWidthsJson = MakeShareable(new FJsonObject());
+		LayoutData->SetObjectField(TEXT("ColumnWidths"), ColumnWidthsJson);
+	}
+	else
+	{
+		ColumnWidthsJson = LayoutData->GetObjectField(TEXT("ColumnWidths"));
+	}
+
+	ColumnWidthsJson->SetNumberField(ColumnId.ToString(), NewWidth);
+}
+
+TSharedPtr<SWidget> SDataAssetSheetEditor::OnConstructHeaderContextMenu()
+{
+	FMenuBuilder MenuBuilder(true, nullptr);
+
+	MenuBuilder.BeginSection("ColumnVisibility", LOCTEXT("ColumnVisibilitySection", "Column Visibility"));
+	{
+		for (FProperty* Prop : Model->GetColumnProperties())
+		{
+			FName ColName = Prop->GetFName();
+			bool bIsVisible = !HiddenColumns.Contains(ColName);
+
+			MenuBuilder.AddMenuEntry(
+				FText::FromName(ColName),
+				FText::GetEmpty(),
+				FSlateIcon(),
+				FUIAction(
+					FExecuteAction::CreateSP(this, &SDataAssetSheetEditor::ToggleColumnVisibility, ColName),
+					FCanExecuteAction(),
+					FIsActionChecked::CreateLambda([bIsVisible]() { return bIsVisible; })
+				),
+				NAME_None,
+				EUserInterfaceActionType::ToggleButton
+			);
+		}
+	}
+	MenuBuilder.EndSection();
+
+	return MenuBuilder.MakeWidget();
+}
+
+void SDataAssetSheetEditor::ToggleColumnVisibility(FName ColumnId)
+{
+	if (HiddenColumns.Contains(ColumnId))
+	{
+		HiddenColumns.Remove(ColumnId);
+	}
+	else
+	{
+		HiddenColumns.Add(ColumnId);
+	}
+
+	RebuildHeaderRow();
+	AssetListView->RequestListRefresh();
+}
+
+bool SDataAssetSheetEditor::IsColumnVisible(FName ColumnId) const
+{
+	return !HiddenColumns.Contains(ColumnId);
 }
 
 void SDataAssetSheetEditor::RegisterAssetRegistryEvents()

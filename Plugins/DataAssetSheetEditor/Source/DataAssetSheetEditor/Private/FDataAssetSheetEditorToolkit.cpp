@@ -9,6 +9,7 @@
 #include "SourceCodeNavigation.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "Engine/Blueprint.h"
+#include "Framework/MultiBox/MultiBoxBuilder.h"
 
 #define LOCTEXT_NAMESPACE "FDataAssetSheetEditorToolkit"
 
@@ -52,6 +53,14 @@ void FDataAssetSheetEditorToolkit::InitEditor(const EToolkitMode::Type Mode, con
 	// Toolkit初期化 / Initialize the toolkit
 	InitAssetEditor(Mode, InitToolkitHost, TEXT("DataAssetSheetEditorApp"), Layout, true, true, InAsset);
 
+	// キーボードショートカット / Bind keyboard shortcuts
+	EditorWidget->BindCommands(GetToolkitCommands());
+
+	// ツールバー拡張 / Extend toolbar with custom buttons
+	TSharedPtr<FExtender> ToolbarExtender = MakeShareable(new FExtender());
+	ExtendToolbar(ToolbarExtender);
+	AddToolbarExtender(ToolbarExtender);
+
 	RegenerateMenusAndToolbars();
 }
 
@@ -83,6 +92,39 @@ void FDataAssetSheetEditorToolkit::PostRegenerateMenusAndToolbars()
 
 		SetMenuOverlay(MenuOverlayBox);
 	}
+}
+
+void FDataAssetSheetEditorToolkit::ExtendToolbar(TSharedPtr<FExtender> Extender)
+{
+	Extender->AddToolBarExtension(
+		"Asset",
+		EExtensionHook::After,
+		GetToolkitCommands(),
+		FToolBarExtensionDelegate::CreateSP(this, &FDataAssetSheetEditorToolkit::FillToolbar)
+	);
+}
+
+void FDataAssetSheetEditorToolkit::FillToolbar(FToolBarBuilder& ToolbarBuilder)
+{
+	ToolbarBuilder.BeginSection("DataAssetSheetCommands");
+	{
+		ToolbarBuilder.AddToolBarButton(
+			FUIAction(FExecuteAction::CreateSP(EditorWidget.ToSharedRef(), &SDataAssetSheetEditor::CreateNewAsset)),
+			NAME_None,
+			LOCTEXT("NewAssetText", "New Asset"),
+			LOCTEXT("NewAssetTooltip", "Create a new DataAsset of the target class"),
+			FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Plus"));
+
+		ToolbarBuilder.AddToolBarButton(
+			FUIAction(
+				FExecuteAction::CreateSP(EditorWidget.ToSharedRef(), &SDataAssetSheetEditor::SaveAllModifiedAssets),
+				FCanExecuteAction::CreateSP(EditorWidget.ToSharedRef(), &SDataAssetSheetEditor::HasModifiedAssets)),
+			NAME_None,
+			LOCTEXT("SaveModifiedText", "Save"),
+			LOCTEXT("SaveModifiedTooltip", "Save all modified assets"),
+			FSlateIcon(FAppStyle::GetAppStyleSetName(), "AssetEditor.SaveAsset"));
+	}
+	ToolbarBuilder.EndSection();
 }
 
 void FDataAssetSheetEditorToolkit::OnTargetClassHyperlinkClicked()

@@ -6,6 +6,7 @@
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Views/SListView.h"
 #include "Widgets/Views/SHeaderRow.h"
+#include "Dom/JsonObject.h"
 
 class UDataAssetSheet;
 class FDataAssetSheetModel;
@@ -34,6 +35,14 @@ public:
 
 	// 登録変更時にテーブルを再構築 / Rebuild table when registration changes
 	void OnSettingsChanged();
+
+	// コマンドリスト設定（Toolkitから呼ばれる）/ Set command list from toolkit
+	void BindCommands(const TSharedRef<FUICommandList>& InCommandList);
+
+	// ツールバーから呼ばれるアクション / Actions called from toolkit toolbar
+	void CreateNewAsset();
+	void SaveAllModifiedAssets();
+	bool HasModifiedAssets() const;
 
 private:
 	// テーブル構築 / Build table from model data
@@ -91,6 +100,38 @@ private:
 	// Hot Reload完了時のコールバック / Hot reload completion callback
 	void OnReloadComplete(EReloadCompleteReason Reason);
 
+	// コンテキストメニュー構築 / Build context menu for selected rows
+	TSharedPtr<SWidget> OnConstructContextMenu();
+
+	// Browse to Asset / Show asset in Content Browser
+	void BrowseToSelectedAsset();
+	bool HasSelectedLoadedAsset() const;
+
+	// アセット削除 / Delete selected asset (single only)
+	void DeleteSelectedAsset();
+	bool CanDeleteSelectedAsset() const;
+
+	// アセット複製 / Duplicate selected asset
+	void DuplicateSelectedAsset();
+
+	// Find References / Open reference viewer for selected asset
+	void FindReferencesForSelectedAsset();
+
+	// Copy/Paste / Clipboard operations for row data
+	void CopySelectedRows();
+	void PasteOnSelectedRows();
+	bool CanPaste() const;
+
+	// レイアウトデータ / Layout persistence (column widths, hidden columns)
+	void LoadLayoutData();
+	void SaveLayoutData();
+	void OnColumnResized(const float NewWidth, FName ColumnId);
+
+	// カラム表示/非表示 / Column visibility
+	TSharedPtr<SWidget> OnConstructHeaderContextMenu();
+	void ToggleColumnVisibility(FName ColumnId);
+	bool IsColumnVisible(FName ColumnId) const;
+
 	// データモデル / Data model
 	TSharedPtr<FDataAssetSheetModel> Model;
 
@@ -105,4 +146,11 @@ private:
 	// タブ用ウィジェット / Widgets for separate tabs
 	TSharedPtr<SWidget> TableWidget;
 	TSharedPtr<SWidget> DetailsWidget;
+
+	// コマンドリスト / Command list for keyboard shortcuts and context menu
+	TSharedPtr<FUICommandList> CommandList;
+
+	// レイアウトデータ / Layout data (column widths, hidden columns)
+	TSharedPtr<FJsonObject> LayoutData;
+	TSet<FName> HiddenColumns;
 };
