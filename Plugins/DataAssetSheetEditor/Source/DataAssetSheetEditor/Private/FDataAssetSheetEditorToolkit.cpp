@@ -90,6 +90,32 @@ void FDataAssetSheetEditorToolkit::PostRegenerateMenusAndToolbars()
 				.ToolTipText(LOCTEXT("TargetClassToolTip", "Open the target DataAsset class definition"))
 			];
 
+		// DisplayClassが設定されている場合は隣に表示 / Show DisplayClass next to TargetClass if set
+		if (Asset->DisplayClass && Asset->DisplayClass->IsChildOf(Asset->TargetClass))
+		{
+			MenuOverlayBox->AddSlot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				.Padding(12.0f, 0.0f, 0.0f, 0.0f)
+				[
+					SNew(STextBlock)
+					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+					.ShadowOffset(FVector2D::UnitVector)
+					.Text(LOCTEXT("DisplayClassLabel", "Display Class: "))
+				];
+
+			MenuOverlayBox->AddSlot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				[
+					SNew(SHyperlink)
+					.Style(FAppStyle::Get(), "Common.GotoNativeCodeHyperlink")
+					.OnNavigate(this, &FDataAssetSheetEditorToolkit::OnDisplayClassHyperlinkClicked)
+					.Text(Asset->DisplayClass->GetDisplayNameText())
+					.ToolTipText(LOCTEXT("DisplayClassToolTip", "Open the display class definition"))
+				];
+		}
+
 		SetMenuOverlay(MenuOverlayBox);
 	}
 }
@@ -146,6 +172,28 @@ void FDataAssetSheetEditorToolkit::OnTargetClassHyperlinkClicked()
 	else if (FSourceCodeNavigation::CanNavigateToClass(TargetClass))
 	{
 		FSourceCodeNavigation::NavigateToClass(TargetClass);
+	}
+}
+
+void FDataAssetSheetEditorToolkit::OnDisplayClassHyperlinkClicked()
+{
+	UDataAssetSheet* Asset = EditingAsset.Get();
+	if (!Asset || !Asset->DisplayClass)
+	{
+		return;
+	}
+
+	UClass* DisplayClass = Asset->DisplayClass;
+
+	// Blueprintクラスの場合はBPエディタを開く / Open Blueprint editor for BP classes
+	if (UBlueprint* BP = Cast<UBlueprint>(DisplayClass->ClassGeneratedBy))
+	{
+		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(BP);
+	}
+	// C++クラスの場合はソースコードに遷移 / Navigate to source code for C++ classes
+	else if (FSourceCodeNavigation::CanNavigateToClass(DisplayClass))
+	{
+		FSourceCodeNavigation::NavigateToClass(DisplayClass);
 	}
 }
 
@@ -224,7 +272,11 @@ TSharedRef<SDockTab> FDataAssetSheetEditorToolkit::SpawnSettingsTab(const FSpawn
 		[
 			SNew(SDataAssetSheetSettingsTab)
 				.DataAssetSheet(Asset)
-				.OnSettingsChanged(FSimpleDelegate::CreateSP(EditorWidget.ToSharedRef(), &SDataAssetSheetEditor::OnSettingsChanged))
+				.OnSettingsChanged(FSimpleDelegate::CreateLambda([this]()
+				{
+					EditorWidget->OnSettingsChanged();
+					RegenerateMenusAndToolbars();
+				}))
 		];
 }
 

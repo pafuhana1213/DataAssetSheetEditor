@@ -61,6 +61,9 @@ public:
 	// プロパティ値をテキストとして取得 / Get property value as display text
 	FString GetPropertyValueText(UDataAsset* InAsset, FProperty* InProperty) const;
 
+	// アセットが指定プロパティを所有するクラスか判定 / Check if asset's class owns the given property
+	bool AssetHasProperty(UDataAsset* InAsset, FProperty* InProperty) const;
+
 	// フィルタ適用 / Apply text filter to row data
 	void ApplyFilter(const FString& InFilterText);
 

@@ -22,6 +22,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "DataAssetSheet")
 	TSubclassOf<UDataAsset> TargetClass;
 
+	// 表示用クラス（派生クラスのプロパティも列に表示したい場合に指定）/ Display class for additional columns from derived class
+	// TargetClassの派生クラスを指定すると、派生クラスで追加されたプロパティも列に表示される
+	// 未指定の場合はTargetClassのプロパティのみ表示
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "DataAssetSheet|Settings", meta = (DisplayName = "Display Class"))
+	TSubclassOf<UDataAsset> DisplayClass;
+
 	// 全アセット自動表示モード（デフォルトOFF）/ Show all assets of TargetClass automatically
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "DataAssetSheet|Settings")
 	bool bShowAll = false;

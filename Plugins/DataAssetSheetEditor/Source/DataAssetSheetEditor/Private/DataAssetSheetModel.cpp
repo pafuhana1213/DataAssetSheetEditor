@@ -212,9 +212,27 @@ void FDataAssetSheetModel::BuildColumnList(UClass* InTargetClass)
 	UE_LOG(LogDataAssetSheetEditor, Log, TEXT("Built %d columns for class %s"), ColumnProperties.Num(), *InTargetClass->GetName());
 }
 
+bool FDataAssetSheetModel::AssetHasProperty(UDataAsset* InAsset, FProperty* InProperty) const
+{
+	if (!InAsset || !InProperty)
+	{
+		return false;
+	}
+
+	UClass* OwnerClass = InProperty->GetOwnerClass();
+	return OwnerClass && InAsset->GetClass()->IsChildOf(OwnerClass);
+}
+
 FString FDataAssetSheetModel::GetPropertyValueText(UDataAsset* InAsset, FProperty* InProperty) const
 {
 	if (!InAsset || !InProperty)
+	{
+		return FString();
+	}
+
+	// アセットのクラスがプロパティを所有するクラスの派生でない場合は空文字を返す
+	// Avoid invalid memory access when asset doesn't have this property
+	if (!AssetHasProperty(InAsset, InProperty))
 	{
 		return FString();
 	}

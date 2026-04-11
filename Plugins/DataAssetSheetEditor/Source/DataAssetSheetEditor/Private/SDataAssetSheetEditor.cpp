@@ -133,6 +133,25 @@ public:
 				TWeakPtr<FDataAssetSheetModel> WeakModel = Model;
 				FProperty* CapturedProp = Prop;
 
+				// アセットがこのプロパティを持たない場合は黒塗りセルを表示
+				// Show blacked-out cell when asset doesn't own this property (base class row for derived-class column)
+				if (RowData->IsLoaded() && !Model->AssetHasProperty(RowData->Asset.Get(), Prop))
+				{
+					static const FSlateColorBrush BlackBrush(FLinearColor(0.02f, 0.02f, 0.02f, 1.0f));
+					return SNew(SBox)
+						.Padding(FMargin(0.0f))
+						[
+							SNew(SBorder)
+								.BorderImage(&BlackBrush)
+								.Padding(FMargin(4.0f, 2.0f))
+								[
+									SNew(STextBlock)
+										.Text(LOCTEXT("N/A", "-"))
+										.ColorAndOpacity(FSlateColor(FLinearColor(0.3f, 0.3f, 0.3f, 1.0f)))
+								]
+						];
+				}
+
 				// Bool値はチェックボックスで表示（読み取り専用）/ Display bool as read-only checkbox
 				if (CastField<FBoolProperty>(Prop))
 				{
@@ -140,10 +159,12 @@ public:
 						.Padding(FMargin(4.0f, 2.0f))
 						[
 							SNew(SCheckBox)
-								.IsChecked_Lambda([WeakRowData, CapturedProp]() -> ECheckBoxState
+								.IsChecked_Lambda([WeakRowData, WeakModel, CapturedProp]() -> ECheckBoxState
 								{
 									TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
-									if (PinnedRow.IsValid() && PinnedRow->IsLoaded())
+									TSharedPtr<FDataAssetSheetModel> PinnedModel = WeakModel.Pin();
+									if (PinnedRow.IsValid() && PinnedModel.IsValid() && PinnedRow->IsLoaded()
+										&& PinnedModel->AssetHasProperty(PinnedRow->Asset.Get(), CapturedProp))
 									{
 										const FBoolProperty* BoolProp = CastField<FBoolProperty>(CapturedProp);
 										const void* ValuePtr = BoolProp->ContainerPtrToValuePtr<void>(PinnedRow->Asset.Get());
@@ -513,7 +534,12 @@ void SDataAssetSheetEditor::RebuildTable()
 
 	// 登録設定に基づいてアセットを検索 / Discover assets based on registration settings
 	Model->DiscoverAssets(TargetClass, Sheet->bShowAll, Sheet->ManualAssets, Sheet->RegisteredCollections);
-	Model->BuildColumnList(TargetClass);
+
+	// DisplayClassが設定されていればそのクラスのプロパティも列に表示 / Use DisplayClass for columns if set
+	UClass* ColumnClass = (Sheet->DisplayClass && Sheet->DisplayClass->IsChildOf(TargetClass))
+		? Sheet->DisplayClass.Get()
+		: TargetClass;
+	Model->BuildColumnList(ColumnClass);
 
 	// ヘッダー行更新 / Rebuild header
 	RebuildHeaderRow();

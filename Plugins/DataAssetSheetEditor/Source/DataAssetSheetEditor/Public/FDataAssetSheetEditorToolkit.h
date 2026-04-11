@@ -36,6 +36,9 @@ private:
 	// Target Classハイパーリンククリック / Navigate to the target class definition
 	void OnTargetClassHyperlinkClicked();
 
+	// Display Classハイパーリンククリック / Navigate to the display class definition
+	void OnDisplayClassHyperlinkClicked();
+
 	// タブ生成コールバック / Tab spawn callbacks
 	TSharedRef<SDockTab> SpawnTableTab(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnDetailsTab(const FSpawnTabArgs& Args);
