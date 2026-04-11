@@ -107,9 +107,9 @@ private:
 	void BrowseToSelectedAsset();
 	bool HasSelectedLoadedAsset() const;
 
-	// アセット削除 / Delete selected asset (single only)
-	void DeleteSelectedAsset();
-	bool CanDeleteSelectedAsset() const;
+	// ManualAssetsから除外 / Remove selected assets from ManualAssets
+	void RemoveSelectedFromManualAssets();
+	bool CanRemoveSelectedFromManualAssets() const;
 
 	// アセット複製 / Duplicate selected asset
 	void DuplicateSelectedAsset();

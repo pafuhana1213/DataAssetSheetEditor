@@ -29,7 +29,6 @@
 #include "IAssetTools.h"
 #include "AssetToolsModule.h"
 #include "Factories/DataAssetFactory.h"
-#include "ObjectTools.h"
 #include "FileHelpers.h"
 #include "Editor/EditorEngine.h"
 #include "Framework/Commands/GenericCommands.h"
@@ -1004,13 +1003,13 @@ void SDataAssetSheetEditor::BindCommands(const TSharedRef<FUICommandList>& InCom
 	CommandList->MapAction(
 		FGenericCommands::Get().Duplicate,
 		FExecuteAction::CreateSP(this, &SDataAssetSheetEditor::DuplicateSelectedAsset),
-		FCanExecuteAction::CreateSP(this, &SDataAssetSheetEditor::CanDeleteSelectedAsset)
+		FCanExecuteAction::CreateSP(this, &SDataAssetSheetEditor::HasSelectedLoadedAsset)
 	);
 
 	CommandList->MapAction(
 		FGenericCommands::Get().Delete,
-		FExecuteAction::CreateSP(this, &SDataAssetSheetEditor::DeleteSelectedAsset),
-		FCanExecuteAction::CreateSP(this, &SDataAssetSheetEditor::CanDeleteSelectedAsset)
+		FExecuteAction::CreateSP(this, &SDataAssetSheetEditor::RemoveSelectedFromManualAssets),
+		FCanExecuteAction::CreateSP(this, &SDataAssetSheetEditor::CanRemoveSelectedFromManualAssets)
 	);
 }
 
@@ -1076,7 +1075,15 @@ TSharedPtr<SWidget> SDataAssetSheetEditor::OnConstructContextMenu()
 	MenuBuilder.BeginSection("AssetOperations", LOCTEXT("AssetOperationsSection", "Operations"));
 	{
 		MenuBuilder.AddMenuEntry(FGenericCommands::Get().Duplicate);
-		MenuBuilder.AddMenuEntry(FGenericCommands::Get().Delete);
+		MenuBuilder.AddMenuEntry(
+			LOCTEXT("RemoveFromManualAssets", "Remove"),
+			LOCTEXT("RemoveFromManualAssetsTooltip", "Remove selected assets from Manual Assets list"),
+			FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Delete"),
+			FUIAction(
+				FExecuteAction::CreateSP(this, &SDataAssetSheetEditor::RemoveSelectedFromManualAssets),
+				FCanExecuteAction::CreateSP(this, &SDataAssetSheetEditor::CanRemoveSelectedFromManualAssets)
+			)
+		);
 	}
 	MenuBuilder.EndSection();
 
@@ -1149,27 +1156,80 @@ void SDataAssetSheetEditor::CreateNewAsset()
 	// OnAssetAddedフックで自動的にテーブル更新される / Table updates via OnAssetAdded hook
 }
 
-void SDataAssetSheetEditor::DeleteSelectedAsset()
+void SDataAssetSheetEditor::RemoveSelectedFromManualAssets()
 {
-	// 単一アセットのみ削除可能 / Single asset deletion only
 	TArray<TSharedPtr<FDataAssetRowData>> SelectedItems = AssetListView->GetSelectedItems();
-	if (SelectedItems.Num() != 1 || !SelectedItems[0].IsValid() || !SelectedItems[0]->IsLoaded())
+	if (SelectedItems.Num() == 0)
 	{
 		return;
 	}
 
-	TArray<FAssetData> AssetsToDelete;
-	AssetsToDelete.Add(FAssetData(SelectedItems[0]->Asset.Get()));
+	UDataAssetSheet* Sheet = DataAssetSheet.Get();
+	if (!Sheet)
+	{
+		return;
+	}
 
-	// 確認ダイアログ + 参照チェック付きで削除 / Delete with confirmation dialog and reference check
-	ObjectTools::DeleteAssets(AssetsToDelete, true);
-	// OnAssetRemovedフックで自動的にテーブル更新される / Table updates via OnAssetRemoved hook
+	// 除外対象パスセットを構築 / Build set of paths to remove
+	TSet<FSoftObjectPath> PathsToRemove;
+	for (const TSharedPtr<FDataAssetRowData>& Item : SelectedItems)
+	{
+		if (Item.IsValid())
+		{
+			PathsToRemove.Add(Item->AssetPath);
+		}
+	}
+
+	// ManualAssetsから除外 / Remove from ManualAssets
+	Sheet->ManualAssets.RemoveAll([&PathsToRemove](const TSoftObjectPtr<UDataAsset>& SoftPtr)
+	{
+		return PathsToRemove.Contains(SoftPtr.ToSoftObjectPath());
+	});
+	Sheet->MarkPackageDirty();
+
+	// テーブル行から除外 / Remove from table rows
+	TArray<TSharedPtr<FDataAssetRowData>>& RowDataList = Model->GetMutableRowDataList();
+	RowDataList.RemoveAll([&PathsToRemove](const TSharedPtr<FDataAssetRowData>& RowData)
+	{
+		return PathsToRemove.Contains(RowData->AssetPath);
+	});
+
+	Model->ReapplyFilter();
+	DetailsView->SetObject(nullptr);
+	AssetListView->RequestListRefresh();
 }
 
-bool SDataAssetSheetEditor::CanDeleteSelectedAsset() const
+bool SDataAssetSheetEditor::CanRemoveSelectedFromManualAssets() const
 {
 	TArray<TSharedPtr<FDataAssetRowData>> SelectedItems = AssetListView->GetSelectedItems();
-	return SelectedItems.Num() == 1 && SelectedItems[0].IsValid() && SelectedItems[0]->IsLoaded();
+	if (SelectedItems.Num() == 0)
+	{
+		return false;
+	}
+
+	UDataAssetSheet* Sheet = DataAssetSheet.Get();
+	if (!Sheet)
+	{
+		return false;
+	}
+
+	// ManualAssetsのパスセットを構築 / Build set of ManualAssets paths
+	TSet<FSoftObjectPath> ManualPaths;
+	for (const TSoftObjectPtr<UDataAsset>& SoftPtr : Sheet->ManualAssets)
+	{
+		ManualPaths.Add(SoftPtr.ToSoftObjectPath());
+	}
+
+	// 全選択アイテムがManualAssetsに含まれているか確認 / Check all selected items are in ManualAssets
+	for (const TSharedPtr<FDataAssetRowData>& Item : SelectedItems)
+	{
+		if (!Item.IsValid() || !ManualPaths.Contains(Item->AssetPath))
+		{
+			return false;
+		}
+	}
+
+	return true;
 }
 
 void SDataAssetSheetEditor::DuplicateSelectedAsset()
