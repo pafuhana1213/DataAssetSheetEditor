@@ -28,6 +28,9 @@ public class DataAssetSheetEditor : ModuleRules
 				"ToolMenus",
 				"PropertyEditor",
 				"AssetRegistry",
+				"ContentBrowser",
+				"DesktopPlatform",
+				"AssetDefinition",
 			}
 		);
 	}
