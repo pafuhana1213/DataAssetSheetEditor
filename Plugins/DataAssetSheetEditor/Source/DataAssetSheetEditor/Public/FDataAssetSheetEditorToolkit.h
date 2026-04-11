@@ -20,6 +20,7 @@ public:
 	void InitEditor(const EToolkitMode::Type Mode, const TSharedPtr<IToolkitHost>& InitToolkitHost, UDataAssetSheet* InAsset);
 
 	// FAssetEditorToolkit
+	virtual void PostRegenerateMenusAndToolbars() override;
 	virtual FName GetToolkitFName() const override;
 	virtual FText GetBaseToolkitName() const override;
 	virtual FString GetWorldCentricTabPrefix() const override;
@@ -28,6 +29,9 @@ public:
 	virtual void UnregisterTabSpawners(const TSharedRef<FTabManager>& InTabManager) override;
 
 private:
+	// Target Classハイパーリンククリック / Navigate to the target class definition
+	void OnTargetClassHyperlinkClicked();
+
 	// タブ生成コールバック / Tab spawn callbacks
 	TSharedRef<SDockTab> SpawnTableTab(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnDetailsTab(const FSpawnTabArgs& Args);

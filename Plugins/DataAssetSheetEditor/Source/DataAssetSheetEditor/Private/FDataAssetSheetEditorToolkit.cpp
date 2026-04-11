@@ -5,6 +5,10 @@
 #include "SDataAssetSheetSettingsTab.h"
 #include "DataAssetSheet.h"
 #include "Widgets/Docking/SDockTab.h"
+#include "Widgets/Input/SHyperlink.h"
+#include "SourceCodeNavigation.h"
+#include "Subsystems/AssetEditorSubsystem.h"
+#include "Engine/Blueprint.h"
 
 #define LOCTEXT_NAMESPACE "FDataAssetSheetEditorToolkit"
 
@@ -47,6 +51,60 @@ void FDataAssetSheetEditorToolkit::InitEditor(const EToolkitMode::Type Mode, con
 
 	// Toolkit初期化 / Initialize the toolkit
 	InitAssetEditor(Mode, InitToolkitHost, TEXT("DataAssetSheetEditorApp"), Layout, true, true, InAsset);
+
+	RegenerateMenusAndToolbars();
+}
+
+void FDataAssetSheetEditorToolkit::PostRegenerateMenusAndToolbars()
+{
+	UDataAssetSheet* Asset = EditingAsset.Get();
+	if (Asset && Asset->TargetClass)
+	{
+		TSharedRef<SHorizontalBox> MenuOverlayBox = SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			[
+				SNew(STextBlock)
+				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+				.ShadowOffset(FVector2D::UnitVector)
+				.Text(LOCTEXT("TargetClassLabel", "Target Class: "))
+			]
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			[
+				SNew(SHyperlink)
+				.Style(FAppStyle::Get(), "Common.GotoNativeCodeHyperlink")
+				.OnNavigate(this, &FDataAssetSheetEditorToolkit::OnTargetClassHyperlinkClicked)
+				.Text(Asset->TargetClass->GetDisplayNameText())
+				.ToolTipText(LOCTEXT("TargetClassToolTip", "Open the target DataAsset class definition"))
+			];
+
+		SetMenuOverlay(MenuOverlayBox);
+	}
+}
+
+void FDataAssetSheetEditorToolkit::OnTargetClassHyperlinkClicked()
+{
+	UDataAssetSheet* Asset = EditingAsset.Get();
+	if (!Asset || !Asset->TargetClass)
+	{
+		return;
+	}
+
+	UClass* TargetClass = Asset->TargetClass;
+
+	// Blueprintクラスの場合はBPエディタを開く / Open Blueprint editor for BP classes
+	if (UBlueprint* BP = Cast<UBlueprint>(TargetClass->ClassGeneratedBy))
+	{
+		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(BP);
+	}
+	// C++クラスの場合はソースコードに遷移 / Navigate to source code for C++ classes
+	else if (FSourceCodeNavigation::CanNavigateToClass(TargetClass))
+	{
+		FSourceCodeNavigation::NavigateToClass(TargetClass);
+	}
 }
 
 FName FDataAssetSheetEditorToolkit::GetToolkitFName() const
