@@ -122,6 +122,10 @@ private:
 	void PasteOnSelectedRows();
 	bool CanPaste() const;
 
+	// ドラッグ&ドロップ / Drag and drop from Content Browser
+	FReply HandleDragOver(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent);
+	FReply HandleDrop(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent);
+
 	// レイアウトデータ / Layout persistence (column widths, hidden columns)
 	void LoadLayoutData();
 	void SaveLayoutData();

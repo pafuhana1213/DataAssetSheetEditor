@@ -36,6 +36,9 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Dom/JsonObject.h"
+#include "DragAndDrop/AssetDragDropOp.h"
+#include "Framework/Notifications/NotificationManager.h"
+#include "Widgets/Notifications/SNotificationList.h"
 
 #define LOCTEXT_NAMESPACE "SDataAssetSheetEditor"
 
@@ -200,6 +203,82 @@ private:
 	int32 IndexInList = 0;
 };
 
+// ドロップターゲットラッパー / Drop target wrapper with visual border feedback
+class SDropTargetOverlay : public SCompoundWidget
+{
+public:
+	SLATE_BEGIN_ARGS(SDropTargetOverlay) {}
+		SLATE_DEFAULT_SLOT(FArguments, Content)
+	SLATE_END_ARGS()
+
+	using FOnDragDropDelegate = TDelegate<FReply(const FGeometry&, const FDragDropEvent&)>;
+
+	FOnDragDropDelegate OnDragOverDelegate;
+	FOnDragDropDelegate OnDropDelegate;
+
+	void Construct(const FArguments& InArgs)
+	{
+		bIsDragOver = false;
+		ChildSlot[ InArgs._Content.Widget ];
+	}
+
+	virtual FReply OnDragOver(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent) override
+	{
+		if (OnDragOverDelegate.IsBound())
+		{
+			FReply Reply = OnDragOverDelegate.Execute(MyGeometry, DragDropEvent);
+			if (Reply.IsEventHandled())
+			{
+				bIsDragOver = true;
+				return Reply;
+			}
+		}
+		bIsDragOver = false;
+		return FReply::Unhandled();
+	}
+
+	virtual void OnDragLeave(const FDragDropEvent& DragDropEvent) override
+	{
+		SCompoundWidget::OnDragLeave(DragDropEvent);
+		bIsDragOver = false;
+	}
+
+	virtual FReply OnDrop(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent) override
+	{
+		bIsDragOver = false;
+		if (OnDropDelegate.IsBound())
+		{
+			return OnDropDelegate.Execute(MyGeometry, DragDropEvent);
+		}
+		return FReply::Unhandled();
+	}
+
+	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry,
+		const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements,
+		int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override
+	{
+		LayerId = SCompoundWidget::OnPaint(Args, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
+
+		if (bIsDragOver)
+		{
+			const FLinearColor BorderColor(0.2f, 0.6f, 1.0f, 0.8f);
+			FSlateDrawElement::MakeBox(
+				OutDrawElements,
+				LayerId + 1,
+				AllottedGeometry.ToPaintGeometry(),
+				FAppStyle::GetBrush("Border"),
+				ESlateDrawEffect::None,
+				BorderColor
+			);
+			return LayerId + 1;
+		}
+		return LayerId;
+	}
+
+private:
+	bool bIsDragOver;
+};
+
 // --- SDataAssetSheetEditor ---
 
 void SDataAssetSheetEditor::Construct(const FArguments& InArgs)
@@ -230,8 +309,11 @@ void SDataAssetSheetEditor::Construct(const FArguments& InArgs)
 		.SelectionMode(ESelectionMode::Multi)
 		.HeaderRow(HeaderRow);
 
-	// テーブルウィジェット構築（ツールバー + テーブル + オーバーレイ）/ Build table widget
-	TableWidget = SNew(SVerticalBox)
+	// テーブルウィジェット構築（ドロップターゲット + ツールバー + テーブル + オーバーレイ）/ Build table widget with drop target
+	TSharedRef<SDropTargetOverlay> DropTarget = SNew(SDropTargetOverlay)
+		.Content()
+		[
+			SNew(SVerticalBox)
 
 		// ツールバー / Toolbar
 		+ SVerticalBox::Slot()
@@ -361,7 +443,12 @@ void SDataAssetSheetEditor::Construct(const FArguments& InArgs)
 					.Text(this, &SDataAssetSheetEditor::GetEmptyMessageText)
 					.Visibility(this, &SDataAssetSheetEditor::GetEmptyMessageVisibility)
 			]
-		];
+		]
+	];
+
+	DropTarget->OnDragOverDelegate.BindSP(this, &SDataAssetSheetEditor::HandleDragOver);
+	DropTarget->OnDropDelegate.BindSP(this, &SDataAssetSheetEditor::HandleDrop);
+	TableWidget = DropTarget;
 
 	// 詳細パネルウィジェット / Details panel widget
 	DetailsWidget = DetailsView;
@@ -1509,6 +1596,117 @@ bool SDataAssetSheetEditor::IsTargetAsset(const FAssetData& AssetData) const
 	}
 
 	return false;
+}
+
+FReply SDataAssetSheetEditor::HandleDragOver(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent)
+{
+	TSharedPtr<FAssetDragDropOp> AssetOp = DragDropEvent.GetOperationAs<FAssetDragDropOp>();
+	if (!AssetOp.IsValid() || !AssetOp->HasAssets())
+	{
+		return FReply::Unhandled();
+	}
+
+	// 少なくとも1つのアセットがTargetClassに一致すればドロップ可能 / Accept if at least one asset matches
+	for (const FAssetData& AssetData : AssetOp->GetAssets())
+	{
+		if (IsTargetAsset(AssetData))
+		{
+			return FReply::Handled();
+		}
+	}
+
+	return FReply::Unhandled();
+}
+
+FReply SDataAssetSheetEditor::HandleDrop(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent)
+{
+	TSharedPtr<FAssetDragDropOp> AssetOp = DragDropEvent.GetOperationAs<FAssetDragDropOp>();
+	if (!AssetOp.IsValid() || !AssetOp->HasAssets())
+	{
+		return FReply::Unhandled();
+	}
+
+	UDataAssetSheet* Sheet = DataAssetSheet.Get();
+	if (!Sheet)
+	{
+		return FReply::Unhandled();
+	}
+
+	int32 AddedCount = 0;
+
+	// ManualAssets内の既存パスセットを構築（重複防止用）/ Build set of existing ManualAsset paths
+	TSet<FSoftObjectPath> ExistingManualPaths;
+	for (const TSoftObjectPtr<UDataAsset>& Existing : Sheet->ManualAssets)
+	{
+		ExistingManualPaths.Add(Existing.ToSoftObjectPath());
+	}
+
+	// テーブル内の既存パスセットを構築（行の重複追加防止用）/ Build set of existing row paths
+	TSet<FSoftObjectPath> ExistingRowPaths;
+	for (const TSharedPtr<FDataAssetRowData>& Row : Model->GetRowDataList())
+	{
+		ExistingRowPaths.Add(Row->AssetPath);
+	}
+
+	for (const FAssetData& AssetData : AssetOp->GetAssets())
+	{
+		if (!IsTargetAsset(AssetData))
+		{
+			continue;
+		}
+
+		FSoftObjectPath AssetPath = AssetData.GetSoftObjectPath();
+
+		// ManualAssets内の重複スキップ / Skip if already in ManualAssets
+		if (ExistingManualPaths.Contains(AssetPath))
+		{
+			continue;
+		}
+
+		// ManualAssetsに追加 / Add to ManualAssets
+		Sheet->ManualAssets.Add(TSoftObjectPtr<UDataAsset>(AssetPath));
+		ExistingManualPaths.Add(AssetPath);
+
+		// テーブル未表示の場合のみ行データ追加 / Add row data only if not already in table
+		if (!ExistingRowPaths.Contains(AssetPath))
+		{
+			TSharedPtr<FDataAssetRowData> NewRowData = MakeShared<FDataAssetRowData>();
+			NewRowData->AssetPath = AssetPath;
+			NewRowData->AssetName = AssetData.AssetName.ToString();
+
+			if (UObject* LoadedObject = AssetPath.ResolveObject())
+			{
+				if (UDataAsset* DataAsset = Cast<UDataAsset>(LoadedObject))
+				{
+					NewRowData->Asset = DataAsset;
+				}
+			}
+
+			Model->GetMutableRowDataList().Add(NewRowData);
+			ExistingRowPaths.Add(AssetPath);
+		}
+
+		++AddedCount;
+	}
+
+	if (AddedCount > 0)
+	{
+		Sheet->MarkPackageDirty();
+		Model->ReapplyFilter();
+		AssetListView->RequestListRefresh();
+		StartAsyncLoad();
+
+		// トースト通知 / Toast notification
+		FNotificationInfo Info(FText::Format(
+			LOCTEXT("DragDropAdded", "Added {0} asset(s) to ManualAssets"),
+			AddedCount));
+		Info.ExpireDuration = 3.0f;
+		FSlateNotificationManager::Get().AddNotification(Info);
+
+		UE_LOG(LogDataAssetSheetEditor, Log, TEXT("Drag-and-drop: added %d asset(s) to ManualAssets"), AddedCount);
+	}
+
+	return (AddedCount > 0) ? FReply::Handled() : FReply::Unhandled();
 }
 
 void SDataAssetSheetEditor::OnAssetAdded(const FAssetData& AssetData)
