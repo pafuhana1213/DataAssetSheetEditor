@@ -21,6 +21,7 @@
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Widgets/Input/SSearchBox.h"
+#include "Math/ColorList.h"
 #include "DesktopPlatformModule.h"
 #include "Misc/FileHelper.h"
 #include "HAL/PlatformApplicationMisc.h"
@@ -38,11 +39,13 @@ public:
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs, const TSharedRef<STableViewBase>& InOwnerTable,
-		TSharedPtr<FDataAssetRowData> InRowData, TSharedPtr<FDataAssetSheetModel> InModel)
+		TSharedPtr<FDataAssetRowData> InRowData, TSharedPtr<FDataAssetSheetModel> InModel,
+		TSharedPtr<SListView<TSharedPtr<FDataAssetRowData>>> InListView)
 	{
 		RowData = InRowData;
 		Model = InModel;
 		IndexInList = InArgs._IndexInList;
+		OwnerListView = InListView;
 		SMultiColumnTableRow::Construct(FSuperRowType::FArguments(), InOwnerTable);
 	}
 
@@ -52,6 +55,17 @@ public:
 		static const FSlateColorBrush EvenBrush(FLinearColor(0.0f, 0.0f, 0.0f, 0.0f));
 		static const FSlateColorBrush OddBrush(FLinearColor(1.0f, 1.0f, 1.0f, 0.03f));
 		return (IndexInList % 2 == 0) ? &EvenBrush : &OddBrush;
+	}
+
+	// 選択行のテキスト色 / Text color for selected rows
+	FSlateColor GetRowTextColor() const
+	{
+		TSharedPtr<SListView<TSharedPtr<FDataAssetRowData>>> ListView = OwnerListView;
+		if (ListView.IsValid() && RowData.IsValid() && ListView->IsItemSelected(RowData))
+		{
+			return FSlateColor(FColorList::Orange);
+		}
+		return FSlateColor::UseForeground();
 	}
 
 	virtual TSharedRef<SWidget> GenerateWidgetForColumn(const FName& ColumnId) override
@@ -146,6 +160,7 @@ public:
 								}
 								return FText::GetEmpty();
 							})
+							.ColorAndOpacity(this, &SDataAssetSheetRow::GetRowTextColor)
 					];
 			}
 		}
@@ -208,6 +223,7 @@ public:
 private:
 	TSharedPtr<FDataAssetRowData> RowData;
 	TSharedPtr<FDataAssetSheetModel> Model;
+	TSharedPtr<SListView<TSharedPtr<FDataAssetRowData>>> OwnerListView;
 	int32 IndexInList = 0;
 };
 
@@ -432,7 +448,7 @@ void SDataAssetSheetEditor::RebuildHeaderRow()
 TSharedRef<ITableRow> SDataAssetSheetEditor::OnGenerateRow(TSharedPtr<FDataAssetRowData> InRowData, const TSharedRef<STableViewBase>& OwnerTable)
 {
 	const int32 Index = Model->GetFilteredRowDataList().IndexOfByKey(InRowData);
-	return SNew(SDataAssetSheetRow, OwnerTable, InRowData, Model)
+	return SNew(SDataAssetSheetRow, OwnerTable, InRowData, Model, AssetListView)
 		.IndexInList(Index);
 }
 
