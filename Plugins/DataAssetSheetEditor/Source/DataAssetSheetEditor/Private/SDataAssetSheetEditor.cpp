@@ -102,7 +102,7 @@ public:
 		}
 
 		// プロパティ列 / Property value column
-		if (RowData->IsLoaded() && Model.IsValid())
+		if (Model.IsValid())
 		{
 			FProperty* Prop = nullptr;
 			for (FProperty* ColProp : Model->GetColumnProperties())
@@ -165,7 +165,7 @@ public:
 			}
 		}
 
-		// 未ロード時は空表示 / Empty when not loaded
+		// プロパティが見つからなかった場合 / Property not found
 		return SNew(SBox);
 	}
 
