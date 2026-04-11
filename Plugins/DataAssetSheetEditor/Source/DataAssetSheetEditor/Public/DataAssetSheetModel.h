@@ -6,6 +6,7 @@
 #include "Engine/DataAsset.h"
 #include "Engine/StreamableManager.h"
 #include "Engine/EngineTypes.h"
+#include "Widgets/Views/SHeaderRow.h"
 
 // ロード状態 / Asset loading state
 enum class EDataAssetSheetLoadingState : uint8
@@ -63,6 +64,9 @@ public:
 	// フィルタ適用 / Apply text filter to row data
 	void ApplyFilter(const FString& InFilterText);
 
+	// カラムソート / Sort filtered rows by column
+	void SortByColumn(const FName& ColumnId, EColumnSortMode::Type InSortMode);
+
 	// アクセサ / Accessors
 	const TArray<TSharedPtr<FDataAssetRowData>>& GetRowDataList() const { return RowDataList; }
 	TArray<TSharedPtr<FDataAssetRowData>>& GetMutableRowDataList() { return RowDataList; }
@@ -70,6 +74,12 @@ public:
 	const TArray<FProperty*>& GetColumnProperties() const { return ColumnProperties; }
 	EDataAssetSheetLoadingState GetLoadingState() const { return LoadingState; }
 	bool IsFiltered() const { return !FilterText.IsEmpty(); }
+	const FString& GetFilterText() const { return FilterText; }
+	FName GetSortColumnId() const { return SortColumnId; }
+	EColumnSortMode::Type GetSortMode() const { return SortMode; }
+
+	// 現在のフィルタテキストで再フィルタ（ソートも再適用）/ Re-apply current filter and sort
+	void ReapplyFilter() { ApplyFilter(FilterText); }
 
 private:
 	// 行データの追加ヘルパー（重複排除付き）/ Add row data with deduplication
@@ -89,6 +99,10 @@ private:
 
 	// ロード状態 / Current loading state
 	EDataAssetSheetLoadingState LoadingState = EDataAssetSheetLoadingState::NotStarted;
+
+	// ソート状態 / Current sort state
+	FName SortColumnId;
+	EColumnSortMode::Type SortMode = EColumnSortMode::None;
 
 	// 非同期ロード管理 / Async load management
 	FStreamableManager StreamableManager;

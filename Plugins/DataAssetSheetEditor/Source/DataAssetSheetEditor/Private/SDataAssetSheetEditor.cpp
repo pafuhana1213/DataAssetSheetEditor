@@ -296,6 +296,31 @@ void SDataAssetSheetEditor::Construct(const FArguments& InArgs)
 					.HintText(LOCTEXT("SearchHint", "Search..."))
 					.OnTextChanged(this, &SDataAssetSheetEditor::OnFilterTextChanged)
 			]
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			.Padding(8.0f, 0.0f, 0.0f, 0.0f)
+			[
+				SNew(STextBlock)
+					.Text_Lambda([this]() -> FText
+					{
+						if (!Model.IsValid())
+						{
+							return FText::GetEmpty();
+						}
+						const int32 FilteredCount = Model->GetFilteredRowDataList().Num();
+						const int32 TotalCount = Model->GetRowDataList().Num();
+						if (Model->IsFiltered())
+						{
+							return FText::Format(
+								LOCTEXT("RowCountFiltered", "{0} / {1}"),
+								FilteredCount, TotalCount);
+						}
+						return FText::Format(
+							LOCTEXT("RowCount", "{0} assets"), TotalCount);
+					})
+					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+			]
 		]
 
 		// テーブル + ローディングオーバーレイ / Table with loading overlay
@@ -410,8 +435,8 @@ void SDataAssetSheetEditor::RebuildTable()
 	// ヘッダー行更新 / Rebuild header
 	RebuildHeaderRow();
 
-	// フィルタ適用（空フィルタ = 全行表示）/ Apply filter (empty = show all)
-	Model->ApplyFilter(FString());
+	// フィルタ再適用（SearchBoxのテキストと状態を一致させる）/ Re-apply filter to keep in sync with SearchBox
+	Model->ReapplyFilter();
 
 	// テーブル更新（アセット名のみ表示）/ Refresh table (asset names only at this point)
 	AssetListView->RequestListRefresh();
@@ -431,15 +456,20 @@ void SDataAssetSheetEditor::RebuildHeaderRow()
 	HeaderRow->AddColumn(
 		SHeaderRow::Column("AssetName")
 		.DefaultLabel(LOCTEXT("AssetName", "Asset Name"))
+		.SortMode(TAttribute<EColumnSortMode::Type>::CreateSP(this, &SDataAssetSheetEditor::GetSortModeForColumn, FName("AssetName")))
+		.OnSort(FOnSortModeChanged::CreateSP(this, &SDataAssetSheetEditor::OnSortModeChanged))
 		.FillWidth(1.0f)
 	);
 
 	// プロパティ列を動的に追加 / Add property columns dynamically
 	for (FProperty* Prop : Model->GetColumnProperties())
 	{
+		FName ColName = Prop->GetFName();
 		HeaderRow->AddColumn(
-			SHeaderRow::Column(Prop->GetFName())
-			.DefaultLabel(FText::FromName(Prop->GetFName()))
+			SHeaderRow::Column(ColName)
+			.DefaultLabel(FText::FromName(ColName))
+			.SortMode(TAttribute<EColumnSortMode::Type>::CreateSP(this, &SDataAssetSheetEditor::GetSortModeForColumn, ColName))
+			.OnSort(FOnSortModeChanged::CreateSP(this, &SDataAssetSheetEditor::OnSortModeChanged))
 			.FillWidth(1.0f)
 		);
 	}
@@ -490,7 +520,7 @@ void SDataAssetSheetEditor::StartAsyncLoad()
 void SDataAssetSheetEditor::OnAsyncLoadCompleted()
 {
 	// フィルタ再適用（ロード後のプロパティ値でフィルタ可能に）/ Re-apply filter with loaded property values
-	Model->ApplyFilter(FString());
+	Model->ReapplyFilter();
 
 	// テーブルを更新してプロパティ値を表示 / Refresh table to show property values
 	AssetListView->RequestListRefresh();
@@ -503,11 +533,6 @@ EVisibility SDataAssetSheetEditor::GetLoadingVisibility() const
 	return (Model.IsValid() && Model->GetLoadingState() == EDataAssetSheetLoadingState::Loading)
 		? EVisibility::Visible
 		: EVisibility::Collapsed;
-}
-
-EVisibility SDataAssetSheetEditor::GetTableVisibility() const
-{
-	return EVisibility::Visible;
 }
 
 EVisibility SDataAssetSheetEditor::GetEmptyMessageVisibility() const
@@ -615,40 +640,32 @@ FReply SDataAssetSheetEditor::OnExportCSVClicked()
 		CSVContent += TEXT("\n");
 	}
 
-	// UTF-8 BOM付きで保存 / Save with UTF-8 BOM for Excel compatibility
-	FFileHelper::SaveStringToFile(CSVContent, *OutFiles[0], FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
-
-	// BOMを手動追加 / Manually prepend BOM
-	TArray<uint8> FileData;
-	FFileHelper::LoadFileToArray(FileData, *OutFiles[0]);
-	TArray<uint8> BOMData;
-	BOMData.Add(0xEF);
-	BOMData.Add(0xBB);
-	BOMData.Add(0xBF);
-	BOMData.Append(FileData);
-	FFileHelper::SaveArrayToFile(BOMData, *OutFiles[0]);
+	// UTF-8 BOM付きで保存（Excel互換）/ Save with UTF-8 BOM for Excel compatibility
+	FFileHelper::SaveStringToFile(CSVContent, *OutFiles[0], FFileHelper::EEncodingOptions::ForceUTF8);
 
 	UE_LOG(LogDataAssetSheetEditor, Log, TEXT("CSV exported to: %s"), *OutFiles[0]);
 	return FReply::Handled();
 }
 
-// CSVの1行をパース / Parse a single CSV line respecting quoted fields
-static TArray<FString> ParseCSVLine(const FString& InLine)
+// CSVコンテンツをレコード（行×フィールド）にパース（クォート内改行対応）
+// Parse CSV content into records (rows of fields), handling multiline quoted fields
+static TArray<TArray<FString>> ParseCSVRecords(const FString& InCSVContent)
 {
-	TArray<FString> Fields;
+	TArray<TArray<FString>> Records;
+	TArray<FString> CurrentRecord;
 	FString CurrentField;
 	bool bInQuotes = false;
 
-	for (int32 i = 0; i < InLine.Len(); ++i)
+	for (int32 i = 0; i < InCSVContent.Len(); ++i)
 	{
-		TCHAR Ch = InLine[i];
+		TCHAR Ch = InCSVContent[i];
 
 		if (bInQuotes)
 		{
 			if (Ch == TEXT('"'))
 			{
 				// ダブルクォートのエスケープチェック / Check for escaped double quote
-				if (i + 1 < InLine.Len() && InLine[i + 1] == TEXT('"'))
+				if (i + 1 < InCSVContent.Len() && InCSVContent[i + 1] == TEXT('"'))
 				{
 					CurrentField += TEXT('"');
 					++i;
@@ -671,8 +688,19 @@ static TArray<FString> ParseCSVLine(const FString& InLine)
 			}
 			else if (Ch == TEXT(','))
 			{
-				Fields.Add(CurrentField);
+				CurrentRecord.Add(CurrentField);
 				CurrentField.Empty();
+			}
+			else if (Ch == TEXT('\r'))
+			{
+				// CRスキップ / Skip CR
+			}
+			else if (Ch == TEXT('\n'))
+			{
+				CurrentRecord.Add(CurrentField);
+				CurrentField.Empty();
+				Records.Add(MoveTemp(CurrentRecord));
+				CurrentRecord.Empty();
 			}
 			else
 			{
@@ -680,8 +708,15 @@ static TArray<FString> ParseCSVLine(const FString& InLine)
 			}
 		}
 	}
-	Fields.Add(CurrentField);
-	return Fields;
+
+	// 最終レコード（末尾改行なしの場合）/ Last record if no trailing newline
+	if (!CurrentField.IsEmpty() || !CurrentRecord.IsEmpty())
+	{
+		CurrentRecord.Add(CurrentField);
+		Records.Add(MoveTemp(CurrentRecord));
+	}
+
+	return Records;
 }
 
 FReply SDataAssetSheetEditor::OnImportCSVClicked()
@@ -722,17 +757,16 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 		return FReply::Handled();
 	}
 
-	// 行に分割 / Split into lines
-	TArray<FString> Lines;
-	CSVContent.ParseIntoArrayLines(Lines);
-	if (Lines.Num() < 2)
+	// レコード単位でパース（クォート内改行対応）/ Parse into records (handles multiline quoted fields)
+	TArray<TArray<FString>> Records = ParseCSVRecords(CSVContent);
+	if (Records.Num() < 2)
 	{
 		UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("CSV file has no data rows"));
 		return FReply::Handled();
 	}
 
-	// ヘッダー行をパース / Parse header row
-	TArray<FString> Headers = ParseCSVLine(Lines[0]);
+	// ヘッダー行を取得 / Get header row
+	const TArray<FString>& Headers = Records[0];
 	if (Headers.Num() < 2 || Headers[0] != TEXT("AssetName"))
 	{
 		UE_LOG(LogDataAssetSheetEditor, Error, TEXT("Invalid CSV header: first column must be 'AssetName'"));
@@ -762,9 +796,9 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 	int32 FailCount = 0;
 
 	// データ行をインポート / Import data rows
-	for (int32 LineIndex = 1; LineIndex < Lines.Num(); ++LineIndex)
+	for (int32 RecordIndex = 1; RecordIndex < Records.Num(); ++RecordIndex)
 	{
-		TArray<FString> Fields = ParseCSVLine(Lines[LineIndex]);
+		const TArray<FString>& Fields = Records[RecordIndex];
 		if (Fields.IsEmpty())
 		{
 			continue;
@@ -820,12 +854,27 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 		++SuccessCount;
 	}
 
-	// テーブル更新 / Refresh table
-	Model->ApplyFilter(FString());
+	// テーブル更新（フィルタ保持）/ Refresh table (preserve filter)
+	Model->ReapplyFilter();
 	AssetListView->RequestListRefresh();
 
 	UE_LOG(LogDataAssetSheetEditor, Log, TEXT("CSV import complete: %d succeeded, %d failed"), SuccessCount, FailCount);
 	return FReply::Handled();
+}
+
+void SDataAssetSheetEditor::OnSortModeChanged(EColumnSortPriority::Type /*SortPriority*/, const FName& ColumnId, EColumnSortMode::Type SortMode)
+{
+	Model->SortByColumn(ColumnId, SortMode);
+	AssetListView->RequestListRefresh();
+}
+
+EColumnSortMode::Type SDataAssetSheetEditor::GetSortModeForColumn(FName ColumnId) const
+{
+	if (Model.IsValid() && Model->GetSortColumnId() == ColumnId)
+	{
+		return Model->GetSortMode();
+	}
+	return EColumnSortMode::None;
 }
 
 void SDataAssetSheetEditor::OnReloadComplete(EReloadCompleteReason Reason)
@@ -900,6 +949,7 @@ void SDataAssetSheetEditor::OnAssetAdded(const FAssetData& AssetData)
 	}
 
 	Model->GetMutableRowDataList().Add(NewRowData);
+	Model->ReapplyFilter();
 	AssetListView->RequestListRefresh();
 
 	UE_LOG(LogDataAssetSheetEditor, Log, TEXT("Asset added: %s"), *AssetData.AssetName.ToString());
@@ -931,8 +981,24 @@ void SDataAssetSheetEditor::OnAssetRemoved(const FAssetData& AssetData)
 		return RowData->AssetPath == RemovedPath;
 	});
 
-	// 詳細パネルの選択が削除されたアセットならクリア / Clear details if removed asset was selected
-	DetailsView->SetObject(nullptr);
+	Model->ReapplyFilter();
+
+	// 削除されたアセットが選択中の場合のみ詳細パネルをクリア / Only clear details if removed asset was selected
+	TArray<TSharedPtr<FDataAssetRowData>> SelectedItems = AssetListView->GetSelectedItems();
+	bool bWasSelected = false;
+	for (const TSharedPtr<FDataAssetRowData>& Item : SelectedItems)
+	{
+		if (Item.IsValid() && Item->AssetPath == RemovedPath)
+		{
+			bWasSelected = true;
+			break;
+		}
+	}
+	if (bWasSelected)
+	{
+		DetailsView->SetObject(nullptr);
+	}
+
 	AssetListView->RequestListRefresh();
 
 	UE_LOG(LogDataAssetSheetEditor, Log, TEXT("Asset removed: %s"), *AssetData.AssetName.ToString());
@@ -957,6 +1023,7 @@ void SDataAssetSheetEditor::OnAssetRenamed(const FAssetData& AssetData, const FS
 		}
 	}
 
+	Model->ReapplyFilter();
 	AssetListView->RequestListRefresh();
 	UE_LOG(LogDataAssetSheetEditor, Log, TEXT("Asset renamed: %s -> %s"), *OldObjectPath, *AssetData.AssetName.ToString());
 }

@@ -7,6 +7,7 @@
 #include "ICollectionManager.h"
 #include "CollectionManagerModule.h"
 #include "ICollectionContainer.h"
+#include "UObject/UnrealType.h"
 
 FDataAssetSheetModel::FDataAssetSheetModel()
 {
@@ -242,6 +243,12 @@ void FDataAssetSheetModel::ApplyFilter(const FString& InFilterText)
 	{
 		// フィルタなし：全行を表示 / No filter: show all rows
 		FilteredRowDataList = RowDataList;
+
+		// ソート状態があれば再適用 / Re-apply sort if active
+		if (SortMode != EColumnSortMode::None)
+		{
+			SortByColumn(SortColumnId, SortMode);
+		}
 		return;
 	}
 
@@ -274,4 +281,72 @@ void FDataAssetSheetModel::ApplyFilter(const FString& InFilterText)
 			}
 		}
 	}
+
+	// ソート状態があれば再適用 / Re-apply sort if active
+	if (SortMode != EColumnSortMode::None)
+	{
+		SortByColumn(SortColumnId, SortMode);
+	}
+}
+
+void FDataAssetSheetModel::SortByColumn(const FName& ColumnId, EColumnSortMode::Type InSortMode)
+{
+	SortColumnId = ColumnId;
+	SortMode = InSortMode;
+
+	if (SortMode == EColumnSortMode::None)
+	{
+		return;
+	}
+
+	// ソート対象プロパティを検索 / Find property for sorting
+	FProperty* SortProp = nullptr;
+	if (ColumnId != "AssetName")
+	{
+		for (FProperty* ColProp : ColumnProperties)
+		{
+			if (ColProp->GetFName() == ColumnId)
+			{
+				SortProp = ColProp;
+				break;
+			}
+		}
+	}
+
+	// 数値プロパティか判定 / Check if numeric property
+	bool bIsNumeric = SortProp && SortProp->IsA<FNumericProperty>();
+
+	FilteredRowDataList.Sort([this, ColumnId, InSortMode, SortProp, bIsNumeric](
+		const TSharedPtr<FDataAssetRowData>& A, const TSharedPtr<FDataAssetRowData>& B)
+	{
+		if (ColumnId == "AssetName")
+		{
+			int32 Result = A->AssetName.Compare(B->AssetName, ESearchCase::IgnoreCase);
+			return (InSortMode == EColumnSortMode::Ascending) ? (Result < 0) : (Result > 0);
+		}
+
+		if (!SortProp)
+		{
+			return false;
+		}
+
+		FString ValueA, ValueB;
+		if (A->IsLoaded()) ValueA = GetPropertyValueText(A->Asset.Get(), SortProp);
+		if (B->IsLoaded()) ValueB = GetPropertyValueText(B->Asset.Get(), SortProp);
+
+		// 数値型は数値として比較 / Compare numerics by value
+		if (bIsNumeric)
+		{
+			double NumA = FCString::Atod(*ValueA);
+			double NumB = FCString::Atod(*ValueB);
+			if (NumA != NumB)
+			{
+				return (InSortMode == EColumnSortMode::Ascending) ? (NumA < NumB) : (NumA > NumB);
+			}
+			return false;
+		}
+
+		int32 Result = ValueA.Compare(ValueB, ESearchCase::IgnoreCase);
+		return (InSortMode == EColumnSortMode::Ascending) ? (Result < 0) : (Result > 0);
+	});
 }

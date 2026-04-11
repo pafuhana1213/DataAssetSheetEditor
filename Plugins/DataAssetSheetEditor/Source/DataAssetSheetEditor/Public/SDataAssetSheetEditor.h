@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Views/SListView.h"
+#include "Widgets/Views/SHeaderRow.h"
 
 class UDataAssetSheet;
 class FDataAssetSheetModel;
@@ -58,7 +59,6 @@ private:
 
 	// ローディングUI表示制御 / Loading UI visibility
 	EVisibility GetLoadingVisibility() const;
-	EVisibility GetTableVisibility() const;
 	EVisibility GetEmptyMessageVisibility() const;
 	FText GetEmptyMessageText() const;
 
@@ -83,6 +83,10 @@ private:
 
 	// 対象クラスに該当するアセットか判定 / Check if asset belongs to the target class
 	bool IsTargetAsset(const FAssetData& AssetData) const;
+
+	// カラムソート / Column sort callbacks
+	void OnSortModeChanged(EColumnSortPriority::Type SortPriority, const FName& ColumnId, EColumnSortMode::Type SortMode);
+	EColumnSortMode::Type GetSortModeForColumn(FName ColumnId) const;
 
 	// Hot Reload完了時のコールバック / Hot reload completion callback
 	void OnReloadComplete(EReloadCompleteReason Reason);
