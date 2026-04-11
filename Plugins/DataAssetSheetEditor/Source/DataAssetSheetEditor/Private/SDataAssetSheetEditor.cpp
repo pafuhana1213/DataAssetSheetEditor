@@ -1434,7 +1434,6 @@ TSharedPtr<SWidget> SDataAssetSheetEditor::OnConstructHeaderContextMenu()
 		for (FProperty* Prop : Model->GetColumnProperties())
 		{
 			FName ColName = Prop->GetFName();
-			bool bIsVisible = !HiddenColumns.Contains(ColName);
 
 			MenuBuilder.AddMenuEntry(
 				FText::FromName(ColName),
@@ -1443,7 +1442,7 @@ TSharedPtr<SWidget> SDataAssetSheetEditor::OnConstructHeaderContextMenu()
 				FUIAction(
 					FExecuteAction::CreateSP(this, &SDataAssetSheetEditor::ToggleColumnVisibility, ColName),
 					FCanExecuteAction(),
-					FIsActionChecked::CreateLambda([bIsVisible]() { return bIsVisible; })
+					FIsActionChecked::CreateSP(this, &SDataAssetSheetEditor::IsColumnVisible, ColName)
 				),
 				NAME_None,
 				EUserInterfaceActionType::ToggleButton
