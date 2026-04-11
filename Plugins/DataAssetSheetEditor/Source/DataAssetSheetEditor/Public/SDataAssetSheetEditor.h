@@ -125,7 +125,6 @@ private:
 	// レイアウトデータ / Layout persistence (column widths, hidden columns)
 	void LoadLayoutData();
 	void SaveLayoutData();
-	void OnColumnResized(const float NewWidth, FName ColumnId);
 
 	// カラム表示/非表示 / Column visibility
 	TSharedPtr<SWidget> OnConstructHeaderContextMenu();

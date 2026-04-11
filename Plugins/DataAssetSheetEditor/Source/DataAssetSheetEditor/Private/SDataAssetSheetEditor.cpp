@@ -449,46 +449,16 @@ void SDataAssetSheetEditor::RebuildHeaderRow()
 {
 	HeaderRow->ClearColumns();
 
-	// レイアウトデータからカラム幅を取得するヘルパー / Helper to get stored column width
-	TSharedPtr<FJsonObject> ColumnWidthsJson;
-	if (LayoutData.IsValid() && LayoutData->HasField(TEXT("ColumnWidths")))
-	{
-		ColumnWidthsJson = LayoutData->GetObjectField(TEXT("ColumnWidths"));
-	}
-
-	auto GetStoredWidth = [&ColumnWidthsJson](const FName& ColName) -> TOptional<float>
-	{
-		if (ColumnWidthsJson.IsValid())
-		{
-			const FString ColNameStr = ColName.ToString();
-			if (ColumnWidthsJson->HasField(ColNameStr))
-			{
-				return ColumnWidthsJson->GetNumberField(ColNameStr);
-			}
-		}
-		return {};
-	};
-
 	// アセット名列（常に先頭）/ Asset name column (always first)
 	{
 		FName AssetNameCol("AssetName");
-		SHeaderRow::FColumn::FArguments AssetNameColArgs = SHeaderRow::Column(AssetNameCol)
+		HeaderRow->AddColumn(
+			SHeaderRow::Column(AssetNameCol)
 			.DefaultLabel(LOCTEXT("AssetName", "Asset Name"))
+			.FillWidth(1.0f)
 			.SortMode(TAttribute<EColumnSortMode::Type>::CreateSP(this, &SDataAssetSheetEditor::GetSortModeForColumn, AssetNameCol))
 			.OnSort(FOnSortModeChanged::CreateSP(this, &SDataAssetSheetEditor::OnSortModeChanged))
-			.OnWidthChanged(FOnWidthChanged::CreateSP(this, &SDataAssetSheetEditor::OnColumnResized, AssetNameCol));
-
-		TOptional<float> StoredWidth = GetStoredWidth(AssetNameCol);
-		if (StoredWidth.IsSet())
-		{
-			AssetNameColArgs.ManualWidth(StoredWidth.GetValue());
-		}
-		else
-		{
-			AssetNameColArgs.FillWidth(1.0f);
-		}
-
-		HeaderRow->AddColumn(AssetNameColArgs);
+		);
 	}
 
 	// プロパティ列を動的に追加 / Add property columns dynamically
@@ -509,24 +479,14 @@ void SDataAssetSheetEditor::RebuildHeaderRow()
 			ColumnTooltip = FText::FromString(Prop->GetCPPType());
 		}
 
-		SHeaderRow::FColumn::FArguments ColArgs = SHeaderRow::Column(ColName)
+		HeaderRow->AddColumn(
+			SHeaderRow::Column(ColName)
 			.DefaultLabel(FText::FromName(ColName))
 			.ToolTipText(ColumnTooltip)
+			.FillWidth(1.0f)
 			.SortMode(TAttribute<EColumnSortMode::Type>::CreateSP(this, &SDataAssetSheetEditor::GetSortModeForColumn, ColName))
 			.OnSort(FOnSortModeChanged::CreateSP(this, &SDataAssetSheetEditor::OnSortModeChanged))
-			.OnWidthChanged(FOnWidthChanged::CreateSP(this, &SDataAssetSheetEditor::OnColumnResized, ColName));
-
-		TOptional<float> StoredWidth = GetStoredWidth(ColName);
-		if (StoredWidth.IsSet())
-		{
-			ColArgs.ManualWidth(StoredWidth.GetValue());
-		}
-		else
-		{
-			ColArgs.FillWidth(1.0f);
-		}
-
-		HeaderRow->AddColumn(ColArgs);
+		);
 	}
 }
 
@@ -1464,26 +1424,6 @@ void SDataAssetSheetEditor::SaveLayoutData()
 	}
 }
 
-void SDataAssetSheetEditor::OnColumnResized(const float NewWidth, FName ColumnId)
-{
-	if (!LayoutData.IsValid())
-	{
-		LayoutData = MakeShareable(new FJsonObject());
-	}
-
-	TSharedPtr<FJsonObject> ColumnWidthsJson;
-	if (!LayoutData->HasField(TEXT("ColumnWidths")))
-	{
-		ColumnWidthsJson = MakeShareable(new FJsonObject());
-		LayoutData->SetObjectField(TEXT("ColumnWidths"), ColumnWidthsJson);
-	}
-	else
-	{
-		ColumnWidthsJson = LayoutData->GetObjectField(TEXT("ColumnWidths"));
-	}
-
-	ColumnWidthsJson->SetNumberField(ColumnId.ToString(), NewWidth);
-}
 
 TSharedPtr<SWidget> SDataAssetSheetEditor::OnConstructHeaderContextMenu()
 {
