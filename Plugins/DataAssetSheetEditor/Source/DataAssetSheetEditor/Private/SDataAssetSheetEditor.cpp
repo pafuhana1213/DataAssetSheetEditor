@@ -2,6 +2,7 @@
 
 #include "SDataAssetSheetEditor.h"
 #include "SDataAssetSheetListView.h"
+#include "SObjectThumbnailCell.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SScrollBar.h"
 #include "DataAssetSheet.h"
@@ -53,128 +54,6 @@ static constexpr float DefaultColumnWidth = 150.0f;
 static constexpr float MinColumnWidth = 32.0f;
 
 #define LOCTEXT_NAMESPACE "SDataAssetSheetEditor"
-
-// Object/Texture セル用ウィジェット / Asset thumbnail cell with in-place swap detection.
-// 詳細パネルでアセットが差し替わったとき、SListView が行ウィジェットを使い回しても
-// Tick で値変化を検知してサムネ/プレースホルダを差し替える。
-class SObjectThumbnailCell : public SCompoundWidget
-{
-public:
-	SLATE_BEGIN_ARGS(SObjectThumbnailCell) {}
-		SLATE_ARGUMENT(TWeakPtr<FDataAssetRowData>, RowData)
-		SLATE_ARGUMENT(TWeakPtr<FDataAssetSheetModel>, Model)
-		SLATE_ARGUMENT(FProperty*, Property)
-		SLATE_ARGUMENT(TSharedPtr<FAssetThumbnailPool>, ThumbnailPool)
-	SLATE_END_ARGS()
-
-	void Construct(const FArguments& InArgs)
-	{
-		WeakRowData = InArgs._RowData;
-		WeakModel = InArgs._Model;
-		Property = InArgs._Property;
-		ThumbnailPool = InArgs._ThumbnailPool;
-
-		ChildSlot
-		[
-			SAssignNew(ContentBox, SBox)
-		];
-
-		RebuildContent(ResolveCurrentAssetPath());
-	}
-
-	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override
-	{
-		SCompoundWidget::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
-
-		const FSoftObjectPath CurrentPath = ResolveCurrentAssetPath();
-		if (CurrentPath != LastPath)
-		{
-			RebuildContent(CurrentPath);
-		}
-	}
-
-private:
-	FSoftObjectPath ResolveCurrentAssetPath() const
-	{
-		TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
-		TSharedPtr<FDataAssetSheetModel> PinnedModel = WeakModel.Pin();
-		if (!PinnedRow.IsValid() || !PinnedModel.IsValid() || !PinnedRow->IsLoaded() || Property == nullptr)
-		{
-			return FSoftObjectPath();
-		}
-		if (!PinnedModel->AssetHasProperty(PinnedRow->Asset.Get(), Property))
-		{
-			return FSoftObjectPath();
-		}
-
-		if (const FObjectProperty* ObjectProp = CastField<FObjectProperty>(Property))
-		{
-			UObject* Value = ObjectProp->GetObjectPropertyValue_InContainer(PinnedRow->Asset.Get());
-			return Value ? FSoftObjectPath(Value) : FSoftObjectPath();
-		}
-		if (const FSoftObjectProperty* SoftProp = CastField<FSoftObjectProperty>(Property))
-		{
-			const FSoftObjectPtr* SoftPtr = SoftProp->ContainerPtrToValuePtr<FSoftObjectPtr>(PinnedRow->Asset.Get());
-			return SoftPtr ? SoftPtr->ToSoftObjectPath() : FSoftObjectPath();
-		}
-		return FSoftObjectPath();
-	}
-
-	void RebuildContent(const FSoftObjectPath& NewPath)
-	{
-		LastPath = NewPath;
-
-		if (!NewPath.IsValid())
-		{
-			Thumbnail.Reset();
-			ContentBox->SetContent(
-				SNew(SBox)
-					.Padding(FMargin(4.0f, 2.0f))
-					.VAlign(VAlign_Center)
-					[
-						SNew(STextBlock)
-							.Text(LOCTEXT("NullAsset", "-"))
-							.ColorAndOpacity(FSlateColor(FLinearColor(0.5f, 0.5f, 0.5f, 1.0f)))
-					]
-			);
-			SetToolTipText(FText::GetEmpty());
-			return;
-		}
-
-		// AssetRegistry 経由で FAssetData を解決すれば未ロードのソフト参照でもサムネを出せる
-		FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
-		FAssetData AssetData = AssetRegistryModule.Get().GetAssetByObjectPath(NewPath);
-
-		Thumbnail = MakeShared<FAssetThumbnail>(AssetData, 24, 24, ThumbnailPool);
-
-		FAssetThumbnailConfig ThumbConfig;
-		ThumbConfig.bAllowFadeIn = true;
-
-		ContentBox->SetContent(
-			SNew(SBox)
-				.Padding(FMargin(4.0f, 2.0f))
-				.HAlign(HAlign_Left)
-				.VAlign(VAlign_Center)
-				[
-					SNew(SBox)
-						.WidthOverride(24.0f)
-						.HeightOverride(24.0f)
-						[
-							Thumbnail->MakeThumbnailWidget(ThumbConfig)
-						]
-				]
-		);
-		SetToolTipText(FText::FromString(NewPath.ToString()));
-	}
-
-	TWeakPtr<FDataAssetRowData> WeakRowData;
-	TWeakPtr<FDataAssetSheetModel> WeakModel;
-	FProperty* Property = nullptr;
-	TSharedPtr<FAssetThumbnailPool> ThumbnailPool;
-	TSharedPtr<FAssetThumbnail> Thumbnail;
-	FSoftObjectPath LastPath;
-	TSharedPtr<SBox> ContentBox;
-};
 
 // テーブル行ウィジェット / Table row widget (private to this translation unit)
 class SDataAssetSheetRow : public SMultiColumnTableRow<TSharedPtr<FDataAssetRowData>>
