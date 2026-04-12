@@ -4,6 +4,7 @@
 #include "SDataAssetSheetListView.h"
 #include "SObjectThumbnailCell.h"
 #include "SDataAssetSheetRow.h"
+#include "SDropTargetOverlay.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SScrollBar.h"
 #include "DataAssetSheet.h"
@@ -50,82 +51,6 @@ static constexpr float DefaultColumnWidth = 150.0f;
 static constexpr float MinColumnWidth = 32.0f;
 
 #define LOCTEXT_NAMESPACE "SDataAssetSheetEditor"
-
-// ドロップターゲットラッパー / Drop target wrapper with visual border feedback
-class SDropTargetOverlay : public SCompoundWidget
-{
-public:
-	SLATE_BEGIN_ARGS(SDropTargetOverlay) {}
-		SLATE_DEFAULT_SLOT(FArguments, Content)
-	SLATE_END_ARGS()
-
-	using FOnDragDropDelegate = TDelegate<FReply(const FGeometry&, const FDragDropEvent&)>;
-
-	FOnDragDropDelegate OnDragOverDelegate;
-	FOnDragDropDelegate OnDropDelegate;
-
-	void Construct(const FArguments& InArgs)
-	{
-		bIsDragOver = false;
-		ChildSlot[ InArgs._Content.Widget ];
-	}
-
-	virtual FReply OnDragOver(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent) override
-	{
-		if (OnDragOverDelegate.IsBound())
-		{
-			FReply Reply = OnDragOverDelegate.Execute(MyGeometry, DragDropEvent);
-			if (Reply.IsEventHandled())
-			{
-				bIsDragOver = true;
-				return Reply;
-			}
-		}
-		bIsDragOver = false;
-		return FReply::Unhandled();
-	}
-
-	virtual void OnDragLeave(const FDragDropEvent& DragDropEvent) override
-	{
-		SCompoundWidget::OnDragLeave(DragDropEvent);
-		bIsDragOver = false;
-	}
-
-	virtual FReply OnDrop(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent) override
-	{
-		bIsDragOver = false;
-		if (OnDropDelegate.IsBound())
-		{
-			return OnDropDelegate.Execute(MyGeometry, DragDropEvent);
-		}
-		return FReply::Unhandled();
-	}
-
-	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry,
-		const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements,
-		int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override
-	{
-		LayerId = SCompoundWidget::OnPaint(Args, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
-
-		if (bIsDragOver)
-		{
-			const FLinearColor BorderColor(0.2f, 0.6f, 1.0f, 0.8f);
-			FSlateDrawElement::MakeBox(
-				OutDrawElements,
-				LayerId + 1,
-				AllottedGeometry.ToPaintGeometry(),
-				FAppStyle::GetBrush("Border"),
-				ESlateDrawEffect::None,
-				BorderColor
-			);
-			return LayerId + 1;
-		}
-		return LayerId;
-	}
-
-private:
-	bool bIsDragOver;
-};
 
 // --- SDataAssetSheetEditor ---
 
