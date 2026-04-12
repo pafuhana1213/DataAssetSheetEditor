@@ -5,6 +5,7 @@
 #include "SObjectThumbnailCell.h"
 #include "SDataAssetSheetRow.h"
 #include "SDropTargetOverlay.h"
+#include "DataAssetSheetCSVUtils.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SScrollBar.h"
 #include "DataAssetSheet.h"
@@ -613,17 +614,6 @@ void SDataAssetSheetEditor::OnFilterTextChanged(const FText& InFilterText)
 	AssetListView->RequestListRefresh();
 }
 
-// CSVのフィールドをエスケープ / Escape a CSV field (handle commas, quotes, newlines)
-static FString EscapeCSVField(const FString& InField)
-{
-	if (InField.Contains(TEXT(",")) || InField.Contains(TEXT("\"")) || InField.Contains(TEXT("\n")))
-	{
-		FString Escaped = InField.Replace(TEXT("\""), TEXT("\"\""));
-		return FString::Printf(TEXT("\"%s\""), *Escaped);
-	}
-	return InField;
-}
-
 FReply SDataAssetSheetEditor::OnExportCSVClicked()
 {
 	SCOPE_CYCLE_COUNTER(STAT_DataAssetSheet_ExportCSV);
@@ -661,22 +651,22 @@ FReply SDataAssetSheetEditor::OnExportCSVClicked()
 
 	// ヘッダー行: AssetPath を一意キーとして第1列に、AssetName は参考列として第2列に出力
 	// Header row: AssetPath as unique key (col 0), AssetName as human-readable label (col 1)
-	CSVContent += EscapeCSVField(TEXT("AssetPath"));
+	CSVContent += DataAssetSheetCSV::EscapeField(TEXT("AssetPath"));
 	CSVContent += TEXT(",");
-	CSVContent += EscapeCSVField(TEXT("AssetName"));
+	CSVContent += DataAssetSheetCSV::EscapeField(TEXT("AssetName"));
 	for (FProperty* Prop : Model->GetColumnProperties())
 	{
 		CSVContent += TEXT(",");
-		CSVContent += EscapeCSVField(Prop->GetName());
+		CSVContent += DataAssetSheetCSV::EscapeField(Prop->GetName());
 	}
 	CSVContent += TEXT("\n");
 
 	// データ行 / Data rows
 	for (const TSharedPtr<FDataAssetRowData>& RowData : Model->GetRowDataList())
 	{
-		CSVContent += EscapeCSVField(RowData->AssetPath.ToString());
+		CSVContent += DataAssetSheetCSV::EscapeField(RowData->AssetPath.ToString());
 		CSVContent += TEXT(",");
-		CSVContent += EscapeCSVField(RowData->AssetName);
+		CSVContent += DataAssetSheetCSV::EscapeField(RowData->AssetName);
 
 		for (FProperty* Prop : Model->GetColumnProperties())
 		{
@@ -684,7 +674,7 @@ FReply SDataAssetSheetEditor::OnExportCSVClicked()
 			const FString* Cached = RowData->CachedDisplayText.Find(Prop->GetFName());
 			if (Cached)
 			{
-				CSVContent += EscapeCSVField(*Cached);
+				CSVContent += DataAssetSheetCSV::EscapeField(*Cached);
 			}
 		}
 		CSVContent += TEXT("\n");
@@ -695,78 +685,6 @@ FReply SDataAssetSheetEditor::OnExportCSVClicked()
 
 	UE_LOG(LogDataAssetSheetEditor, Log, TEXT("CSV exported to: %s"), *OutFiles[0]);
 	return FReply::Handled();
-}
-
-// CSVコンテンツをレコード（行×フィールド）にパース（クォート内改行対応）
-// Parse CSV content into records (rows of fields), handling multiline quoted fields
-static TArray<TArray<FString>> ParseCSVRecords(const FString& InCSVContent)
-{
-	TArray<TArray<FString>> Records;
-	TArray<FString> CurrentRecord;
-	FString CurrentField;
-	bool bInQuotes = false;
-
-	for (int32 i = 0; i < InCSVContent.Len(); ++i)
-	{
-		TCHAR Ch = InCSVContent[i];
-
-		if (bInQuotes)
-		{
-			if (Ch == TEXT('"'))
-			{
-				// ダブルクォートのエスケープチェック / Check for escaped double quote
-				if (i + 1 < InCSVContent.Len() && InCSVContent[i + 1] == TEXT('"'))
-				{
-					CurrentField += TEXT('"');
-					++i;
-				}
-				else
-				{
-					bInQuotes = false;
-				}
-			}
-			else
-			{
-				CurrentField += Ch;
-			}
-		}
-		else
-		{
-			if (Ch == TEXT('"'))
-			{
-				bInQuotes = true;
-			}
-			else if (Ch == TEXT(','))
-			{
-				CurrentRecord.Add(CurrentField);
-				CurrentField.Empty();
-			}
-			else if (Ch == TEXT('\r'))
-			{
-				// CRスキップ / Skip CR
-			}
-			else if (Ch == TEXT('\n'))
-			{
-				CurrentRecord.Add(CurrentField);
-				CurrentField.Empty();
-				Records.Add(MoveTemp(CurrentRecord));
-				CurrentRecord.Empty();
-			}
-			else
-			{
-				CurrentField += Ch;
-			}
-		}
-	}
-
-	// 最終レコード（末尾改行なしの場合）/ Last record if no trailing newline
-	if (!CurrentField.IsEmpty() || !CurrentRecord.IsEmpty())
-	{
-		CurrentRecord.Add(CurrentField);
-		Records.Add(MoveTemp(CurrentRecord));
-	}
-
-	return Records;
 }
 
 FReply SDataAssetSheetEditor::OnImportCSVClicked()
@@ -810,7 +728,7 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 	}
 
 	// レコード単位でパース（クォート内改行対応）/ Parse into records (handles multiline quoted fields)
-	TArray<TArray<FString>> Records = ParseCSVRecords(CSVContent);
+	TArray<TArray<FString>> Records = DataAssetSheetCSV::ParseRecords(CSVContent);
 	if (Records.Num() < 2)
 	{
 		UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("CSV file has no data rows"));
