@@ -2,7 +2,7 @@
 
 #include "AssetDefinition_DataAssetSheet.h"
 #include "DataAssetSheet.h"
-#include "FDataAssetSheetEditorToolkit.h"
+#include "DataAssetSheetEditorToolkit.h"
 
 #define LOCTEXT_NAMESPACE "AssetDefinition_DataAssetSheet"
 
