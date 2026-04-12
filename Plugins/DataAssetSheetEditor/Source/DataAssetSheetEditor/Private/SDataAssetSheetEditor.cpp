@@ -999,6 +999,16 @@ FText SDataAssetSheetEditor::GetEmptyMessageText() const
 
 void SDataAssetSheetEditor::OnDetailsPropertyChanged(const FPropertyChangedEvent& PropertyChangedEvent)
 {
+	// 編集された行のキャッシュを更新（フィルタ/ソート整合性のため）
+	// Refresh display text cache for edited rows so filter/sort stay consistent
+	if (Model.IsValid())
+	{
+		for (const TSharedPtr<FDataAssetRowData>& Item : AssetListView->GetSelectedItems())
+		{
+			Model->RebuildRowCache(Item);
+		}
+	}
+
 	// 詳細パネルでの編集をテーブルに即座に反映 / Reflect details panel edits in the table immediately
 	AssetListView->RequestListRefresh();
 }
@@ -2140,6 +2150,7 @@ void SDataAssetSheetEditor::OnAssetAdded(const FAssetData& AssetData)
 	}
 
 	Model->GetMutableRowDataList().Add(NewRowData);
+	Model->RebuildRowCache(NewRowData);
 	Model->ReapplyFilter();
 	AssetListView->RequestListRefresh();
 

@@ -32,6 +32,10 @@ struct FDataAssetRowData
 	// Asset class resolved from AssetRegistry (available before the asset itself is loaded)
 	TWeakObjectPtr<UClass> AssetClass;
 
+	// プロパティ表示文字列キャッシュ（フィルタ/ソート高速化用）
+	// Cached display text per property column, keyed by FProperty::GetFName()
+	TMap<FName, FString> CachedDisplayText;
+
 	bool IsLoaded() const { return Asset.IsValid(); }
 };
 
@@ -64,6 +68,12 @@ public:
 
 	// プロパティ値をテキストとして取得 / Get property value as display text
 	FString GetPropertyValueText(UDataAsset* InAsset, FProperty* InProperty) const;
+
+	// 行の表示文字列キャッシュを再構築 / Rebuild cached display text for a single row
+	void RebuildRowCache(const TSharedPtr<FDataAssetRowData>& RowData) const;
+
+	// 全行の表示文字列キャッシュを再構築 / Rebuild cached display text for every row
+	void RebuildAllRowCaches() const;
 
 	// アセットが指定プロパティを所有するクラスか判定 / Check if asset's class owns the given property
 	bool AssetHasProperty(UDataAsset* InAsset, FProperty* InProperty) const;

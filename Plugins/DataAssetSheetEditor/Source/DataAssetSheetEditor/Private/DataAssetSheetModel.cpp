@@ -172,6 +172,10 @@ void FDataAssetSheetModel::RequestAsyncLoad(FOnAssetsLoaded OnCompleted)
 			}
 
 			LoadingState = EDataAssetSheetLoadingState::Loaded;
+
+			// ロード完了直後に表示文字列キャッシュを構築 / Build display text cache once assets are loaded
+			RebuildAllRowCaches();
+
 			UE_LOG(LogDataAssetSheetEditor, Log, TEXT("Async load completed for %d assets"), RowDataList.Num());
 			OnCompleted.ExecuteIfBound();
 		})
@@ -271,8 +275,43 @@ FString FDataAssetSheetModel::GetPropertyValueText(UDataAsset* InAsset, FPropert
 	return ValueString;
 }
 
+void FDataAssetSheetModel::RebuildRowCache(const TSharedPtr<FDataAssetRowData>& RowData) const
+{
+	if (!RowData.IsValid())
+	{
+		return;
+	}
+
+	RowData->CachedDisplayText.Reset();
+
+	if (!RowData->IsLoaded())
+	{
+		return;
+	}
+
+	UDataAsset* Asset = RowData->Asset.Get();
+	for (FProperty* Prop : ColumnProperties)
+	{
+		if (!ClassHasProperty(Asset->GetClass(), Prop))
+		{
+			continue;
+		}
+		RowData->CachedDisplayText.Add(Prop->GetFName(), GetPropertyValueText(Asset, Prop));
+	}
+}
+
+void FDataAssetSheetModel::RebuildAllRowCaches() const
+{
+	for (const TSharedPtr<FDataAssetRowData>& RowData : RowDataList)
+	{
+		RebuildRowCache(RowData);
+	}
+}
+
 void FDataAssetSheetModel::ApplyFilter(const FString& InFilterText)
 {
+	SCOPE_CYCLE_COUNTER(STAT_DataAssetSheet_ApplyFilter);
+
 	FilterText = InFilterText;
 	FilteredRowDataList.Empty();
 
@@ -299,23 +338,19 @@ void FDataAssetSheetModel::ApplyFilter(const FString& InFilterText)
 			continue;
 		}
 
-		// プロパティ値チェック / Check property values
-		if (RowData->IsLoaded())
+		// プロパティ値チェック（キャッシュ参照）/ Check cached property values
+		bool bFound = false;
+		for (const TPair<FName, FString>& Pair : RowData->CachedDisplayText)
 		{
-			bool bFound = false;
-			for (FProperty* Prop : ColumnProperties)
+			if (Pair.Value.Contains(FilterText, ESearchCase::IgnoreCase))
 			{
-				FString ValueText = GetPropertyValueText(RowData->Asset.Get(), Prop);
-				if (ValueText.Contains(FilterText, ESearchCase::IgnoreCase))
-				{
-					bFound = true;
-					break;
-				}
+				bFound = true;
+				break;
 			}
-			if (bFound)
-			{
-				FilteredRowDataList.Add(RowData);
-			}
+		}
+		if (bFound)
+		{
+			FilteredRowDataList.Add(RowData);
 		}
 	}
 
@@ -354,8 +389,9 @@ void FDataAssetSheetModel::SortByColumn(const FName& ColumnId, EColumnSortMode::
 
 	// 数値プロパティか判定 / Check if numeric property
 	bool bIsNumeric = SortProp && SortProp->IsA<FNumericProperty>();
+	const FName SortPropName = SortProp ? SortProp->GetFName() : NAME_None;
 
-	FilteredRowDataList.Sort([this, ColumnId, InSortMode, SortProp, bIsNumeric](
+	FilteredRowDataList.Sort([ColumnId, InSortMode, SortProp, bIsNumeric, SortPropName](
 		const TSharedPtr<FDataAssetRowData>& A, const TSharedPtr<FDataAssetRowData>& B)
 	{
 		if (ColumnId == "AssetName")
@@ -369,9 +405,10 @@ void FDataAssetSheetModel::SortByColumn(const FName& ColumnId, EColumnSortMode::
 			return false;
 		}
 
-		FString ValueA, ValueB;
-		if (A->IsLoaded()) ValueA = GetPropertyValueText(A->Asset.Get(), SortProp);
-		if (B->IsLoaded()) ValueB = GetPropertyValueText(B->Asset.Get(), SortProp);
+		const FString* PtrA = A->CachedDisplayText.Find(SortPropName);
+		const FString* PtrB = B->CachedDisplayText.Find(SortPropName);
+		const FString ValueA = PtrA ? *PtrA : FString();
+		const FString ValueB = PtrB ? *PtrB : FString();
 
 		// 数値型は数値として比較 / Compare numerics by value
 		if (bIsNumeric)
