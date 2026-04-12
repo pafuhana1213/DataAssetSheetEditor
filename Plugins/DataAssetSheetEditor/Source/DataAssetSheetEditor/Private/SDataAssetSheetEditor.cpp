@@ -1039,7 +1039,7 @@ FReply SDataAssetSheetEditor::OnKeyDown(const FGeometry& MyGeometry, const FKeyE
 	{
 		if (DetailsView.IsValid())
 		{
-			FSlateApplication::Get().SetKeyboardFocus(DetailsView, EFocusCause::SetDirectly);
+			FSlateApplication::Get().SetAllUserFocus(DetailsView.ToSharedRef(), EFocusCause::Navigation);
 		}
 		return FReply::Handled();
 	}
