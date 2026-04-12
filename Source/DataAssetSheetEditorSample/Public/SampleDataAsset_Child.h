@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "SampleDataAsset.h"
 #include "Engine/Texture2D.h"
+#include "GameplayTagContainer.h"
 #include "SampleDataAsset_Child.generated.h"
 
 /** キャラクター種別 / Character archetype for enum cell display test */
@@ -50,4 +51,12 @@ public:
 	// タグ / Tag
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Child Info")
 	FString Tag;
+
+	// GameplayTag / Gameplay tag
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Child Info")
+	FGameplayTag GameplayTag;
+
+	// GameplayTagContainer / Gameplay tag container
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Child Info")
+	FGameplayTagContainer GameplayTags;
 };

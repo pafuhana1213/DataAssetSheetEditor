@@ -14,6 +14,7 @@ public class DataAssetSheetEditorSample : ModuleRules
 				"Core",
 				"CoreUObject",
 				"Engine",
+				"GameplayTags",
 			}
 		);
 	}
