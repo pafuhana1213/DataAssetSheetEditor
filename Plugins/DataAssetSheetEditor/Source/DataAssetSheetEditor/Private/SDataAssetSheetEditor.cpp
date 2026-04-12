@@ -636,6 +636,7 @@ void SDataAssetSheetEditor::Construct(const FArguments& InArgs)
 		.OnGenerateRow(this, &SDataAssetSheetEditor::OnGenerateRow)
 		.OnSelectionChanged(this, &SDataAssetSheetEditor::OnSelectionChanged)
 		.OnContextMenuOpening(this, &SDataAssetSheetEditor::OnConstructContextMenu)
+		.OnMouseButtonDoubleClick(this, &SDataAssetSheetEditor::OnRowDoubleClicked)
 		.SelectionMode(ESelectionMode::Multi)
 		.HeaderRow(HeaderRow);
 
@@ -995,6 +996,60 @@ FText SDataAssetSheetEditor::GetEmptyMessageText() const
 		return LOCTEXT("NoAssetsSettings", "No assets registered.\nUse the Settings tab to add assets, or enable Show All.");
 	}
 	return LOCTEXT("NoAssets", "No assets found. Create DataAssets of the target class in Content Browser.");
+}
+
+FReply SDataAssetSheetEditor::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
+{
+	const FKey Key = InKeyEvent.GetKey();
+
+	// Enter: 選択中アセットを既定エディタで開く / Open selected assets in default editor
+	if (Key == EKeys::Enter)
+	{
+		OpenSelectedAssets();
+		return FReply::Handled();
+	}
+
+	// F2: 詳細パネルにフォーカス / Focus details panel for editing
+	if (Key == EKeys::F2)
+	{
+		if (DetailsView.IsValid())
+		{
+			FSlateApplication::Get().SetKeyboardFocus(DetailsView, EFocusCause::SetDirectly);
+		}
+		return FReply::Handled();
+	}
+
+	return SCompoundWidget::OnKeyDown(MyGeometry, InKeyEvent);
+}
+
+void SDataAssetSheetEditor::OnRowDoubleClicked(TSharedPtr<FDataAssetRowData> /*InRowData*/)
+{
+	OpenSelectedAssets();
+}
+
+void SDataAssetSheetEditor::OpenSelectedAssets()
+{
+	if (!AssetListView.IsValid())
+	{
+		return;
+	}
+
+	TArray<UObject*> AssetsToOpen;
+	for (const TSharedPtr<FDataAssetRowData>& Item : AssetListView->GetSelectedItems())
+	{
+		if (Item.IsValid() && Item->IsLoaded())
+		{
+			AssetsToOpen.Add(Item->Asset.Get());
+		}
+	}
+
+	if (!AssetsToOpen.IsEmpty())
+	{
+		if (UAssetEditorSubsystem* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>() : nullptr)
+		{
+			Subsystem->OpenEditorForAssets(AssetsToOpen);
+		}
+	}
 }
 
 void SDataAssetSheetEditor::OnDetailsPropertyChanged(const FPropertyChangedEvent& PropertyChangedEvent)

@@ -31,6 +31,11 @@ public:
 	void Construct(const FArguments& InArgs);
 	virtual ~SDataAssetSheetEditor();
 
+	// キー入力ハンドラ（Enter で選択行を開く / F2 で詳細パネルへフォーカス）
+	// Keyboard input handler (Enter opens selected asset, F2 focuses details panel)
+	virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;
+	virtual bool SupportsKeyboardFocus() const override { return true; }
+
 	// タブ用ウィジェット取得 / Get widgets for separate tabs
 	TSharedRef<SWidget> GetTableWidget() const;
 	TSharedRef<SWidget> GetDetailsWidget() const;
@@ -127,6 +132,12 @@ private:
 	// ドラッグ&ドロップ / Drag and drop from Content Browser
 	FReply HandleDragOver(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent);
 	FReply HandleDrop(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent);
+
+	// 選択中のアセットを開く / Open selected assets in their default editor
+	void OpenSelectedAssets();
+
+	// 行ダブルクリック時のコールバック / Row double-click callback
+	void OnRowDoubleClicked(TSharedPtr<FDataAssetRowData> InRowData);
 
 	// レイアウトデータ / Layout persistence (column widths, hidden columns)
 	void LoadLayoutData();
