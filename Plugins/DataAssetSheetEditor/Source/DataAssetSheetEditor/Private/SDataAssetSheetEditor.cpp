@@ -877,13 +877,13 @@ void SDataAssetSheetEditor::RebuildHeaderRow()
 	// アセット名列（常に先頭）/ Asset name column (always first)
 	{
 		FName AssetNameCol("AssetName");
-		HeaderRow->AddColumn(
-			SHeaderRow::Column(AssetNameCol)
+		SHeaderRow::FColumn::FArguments ColArgs = SHeaderRow::Column(AssetNameCol)
 			.DefaultLabel(LOCTEXT("AssetName", "Asset Name"))
-			.FillWidth(1.0f)
 			.SortMode(TAttribute<EColumnSortMode::Type>::CreateSP(this, &SDataAssetSheetEditor::GetSortModeForColumn, AssetNameCol))
 			.OnSort(FOnSortModeChanged::CreateSP(this, &SDataAssetSheetEditor::OnSortModeChanged))
-		);
+			.OnWidthChanged(FOnWidthChanged::CreateSP(this, &SDataAssetSheetEditor::OnColumnWidthChanged, AssetNameCol));
+		ApplyColumnWidth(ColArgs, AssetNameCol);
+		HeaderRow->AddColumn(ColArgs);
 	}
 
 	// プロパティ列を動的に追加 / Add property columns dynamically
@@ -904,15 +904,32 @@ void SDataAssetSheetEditor::RebuildHeaderRow()
 			ColumnTooltip = FText::FromString(Prop->GetCPPType());
 		}
 
-		HeaderRow->AddColumn(
-			SHeaderRow::Column(ColName)
+		SHeaderRow::FColumn::FArguments ColArgs = SHeaderRow::Column(ColName)
 			.DefaultLabel(FText::FromName(ColName))
 			.ToolTipText(ColumnTooltip)
-			.FillWidth(1.0f)
 			.SortMode(TAttribute<EColumnSortMode::Type>::CreateSP(this, &SDataAssetSheetEditor::GetSortModeForColumn, ColName))
 			.OnSort(FOnSortModeChanged::CreateSP(this, &SDataAssetSheetEditor::OnSortModeChanged))
-		);
+			.OnWidthChanged(FOnWidthChanged::CreateSP(this, &SDataAssetSheetEditor::OnColumnWidthChanged, ColName));
+		ApplyColumnWidth(ColArgs, ColName);
+		HeaderRow->AddColumn(ColArgs);
 	}
+}
+
+void SDataAssetSheetEditor::ApplyColumnWidth(SHeaderRow::FColumn::FArguments& OutArgs, FName ColumnId) const
+{
+	if (const float* SavedWidth = ColumnWidths.Find(ColumnId))
+	{
+		OutArgs.ManualWidth(*SavedWidth);
+	}
+	else
+	{
+		OutArgs.FillWidth(1.0f);
+	}
+}
+
+void SDataAssetSheetEditor::OnColumnWidthChanged(float NewWidth, FName ColumnId)
+{
+	ColumnWidths.Add(ColumnId, NewWidth);
 }
 
 TSharedRef<ITableRow> SDataAssetSheetEditor::OnGenerateRow(TSharedPtr<FDataAssetRowData> InRowData, const TSharedRef<STableViewBase>& OwnerTable)
@@ -959,6 +976,14 @@ void SDataAssetSheetEditor::StartAsyncLoad()
 
 void SDataAssetSheetEditor::OnAsyncLoadCompleted()
 {
+	// 保存済みのソート状態を一度だけ復元 / Restore persisted sort state once after first load
+	if (SavedSortMode != EColumnSortMode::None && !SavedSortColumnId.IsNone())
+	{
+		Model->SortByColumn(SavedSortColumnId, SavedSortMode);
+		SavedSortColumnId = NAME_None;
+		SavedSortMode = EColumnSortMode::None;
+	}
+
 	// フィルタ再適用（ロード後のプロパティ値でフィルタ可能に）/ Re-apply filter with loaded property values
 	Model->ReapplyFilter();
 
@@ -1970,6 +1995,9 @@ void SDataAssetSheetEditor::LoadLayoutData()
 {
 	LayoutData.Reset();
 	HiddenColumns.Empty();
+	ColumnWidths.Empty();
+	SavedSortColumnId = NAME_None;
+	SavedSortMode = EColumnSortMode::None;
 
 	UDataAssetSheet* Sheet = DataAssetSheet.Get();
 	if (!Sheet)
@@ -1986,14 +2014,39 @@ void SDataAssetSheetEditor::LoadLayoutData()
 		FJsonSerializer::Deserialize(JsonReader, LayoutData);
 	}
 
+	if (!LayoutData.IsValid())
+	{
+		return;
+	}
+
 	// HiddenColumnsを復元 / Restore hidden columns
-	if (LayoutData.IsValid() && LayoutData->HasField(TEXT("HiddenColumns")))
+	if (LayoutData->HasField(TEXT("HiddenColumns")))
 	{
 		const TArray<TSharedPtr<FJsonValue>>& HiddenArray = LayoutData->GetArrayField(TEXT("HiddenColumns"));
 		for (const TSharedPtr<FJsonValue>& Value : HiddenArray)
 		{
 			HiddenColumns.Add(FName(*Value->AsString()));
 		}
+	}
+
+	// 列幅を復元 / Restore column widths
+	if (LayoutData->HasField(TEXT("ColumnWidths")))
+	{
+		const TSharedPtr<FJsonObject>& WidthsObj = LayoutData->GetObjectField(TEXT("ColumnWidths"));
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : WidthsObj->Values)
+		{
+			ColumnWidths.Add(FName(*Pair.Key), static_cast<float>(Pair.Value->AsNumber()));
+		}
+	}
+
+	// ソート状態を復元 / Restore sort state
+	if (LayoutData->HasField(TEXT("SortColumn")))
+	{
+		SavedSortColumnId = FName(*LayoutData->GetStringField(TEXT("SortColumn")));
+	}
+	if (LayoutData->HasField(TEXT("SortMode")))
+	{
+		SavedSortMode = static_cast<EColumnSortMode::Type>(LayoutData->GetIntegerField(TEXT("SortMode")));
 	}
 }
 
@@ -2017,6 +2070,34 @@ void SDataAssetSheetEditor::SaveLayoutData()
 		HiddenArray.Add(MakeShareable(new FJsonValueString(ColName.ToString())));
 	}
 	LayoutData->SetArrayField(TEXT("HiddenColumns"), HiddenArray);
+
+	// 現在の列幅を HeaderRow から取得して保存 / Capture current column widths from HeaderRow
+	if (HeaderRow.IsValid())
+	{
+		for (const SHeaderRow::FColumn& Column : HeaderRow->GetColumns())
+		{
+			ColumnWidths.Add(Column.ColumnId, Column.GetWidth());
+		}
+	}
+
+	TSharedPtr<FJsonObject> WidthsObj = MakeShareable(new FJsonObject());
+	for (const TPair<FName, float>& Pair : ColumnWidths)
+	{
+		WidthsObj->SetNumberField(Pair.Key.ToString(), Pair.Value);
+	}
+	LayoutData->SetObjectField(TEXT("ColumnWidths"), WidthsObj);
+
+	// ソート状態を保存 / Save sort state
+	if (Model.IsValid() && Model->GetSortMode() != EColumnSortMode::None)
+	{
+		LayoutData->SetStringField(TEXT("SortColumn"), Model->GetSortColumnId().ToString());
+		LayoutData->SetNumberField(TEXT("SortMode"), static_cast<int32>(Model->GetSortMode()));
+	}
+	else
+	{
+		LayoutData->RemoveField(TEXT("SortColumn"));
+		LayoutData->RemoveField(TEXT("SortMode"));
+	}
 
 	const FString LayoutFilename = FPaths::ProjectSavedDir() / TEXT("AssetData") / TEXT("DataAssetSheetLayout") / Sheet->GetName() + TEXT(".json");
 

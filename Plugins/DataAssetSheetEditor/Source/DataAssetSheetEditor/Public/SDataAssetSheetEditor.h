@@ -58,6 +58,12 @@ private:
 	// SHeaderRow構築 / Build header row from column properties
 	void RebuildHeaderRow();
 
+	// 保存済みの列幅を FArguments に適用 / Apply persisted column width to header column args
+	void ApplyColumnWidth(SHeaderRow::FColumn::FArguments& OutArgs, FName ColumnId) const;
+
+	// 列幅変更コールバック / Callback when user resizes a column
+	void OnColumnWidthChanged(float NewWidth, FName ColumnId);
+
 	// 行生成コールバック / Row generation callback for SListView
 	TSharedRef<ITableRow> OnGenerateRow(TSharedPtr<FDataAssetRowData> InRowData, const TSharedRef<STableViewBase>& OwnerTable);
 
@@ -169,6 +175,9 @@ private:
 	// レイアウトデータ / Layout data (column widths, hidden columns)
 	TSharedPtr<FJsonObject> LayoutData;
 	TSet<FName> HiddenColumns;
+	TMap<FName, float> ColumnWidths;
+	FName SavedSortColumnId;
+	EColumnSortMode::Type SavedSortMode = EColumnSortMode::None;
 
 	// セル描画用のサムネイルプール / Thumbnail pool shared across rows for Object/Texture cells
 	TSharedPtr<FAssetThumbnailPool> ThumbnailPool;
