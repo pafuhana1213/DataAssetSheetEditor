@@ -1065,7 +1065,10 @@ FReply SDataAssetSheetEditor::OnExportCSVClicked()
 	// CSV構築 / Build CSV content
 	FString CSVContent;
 
-	// ヘッダー行 / Header row
+	// ヘッダー行: AssetPath を一意キーとして第1列に、AssetName は参考列として第2列に出力
+	// Header row: AssetPath as unique key (col 0), AssetName as human-readable label (col 1)
+	CSVContent += EscapeCSVField(TEXT("AssetPath"));
+	CSVContent += TEXT(",");
 	CSVContent += EscapeCSVField(TEXT("AssetName"));
 	for (FProperty* Prop : Model->GetColumnProperties())
 	{
@@ -1077,15 +1080,17 @@ FReply SDataAssetSheetEditor::OnExportCSVClicked()
 	// データ行 / Data rows
 	for (const TSharedPtr<FDataAssetRowData>& RowData : Model->GetRowDataList())
 	{
+		CSVContent += EscapeCSVField(RowData->AssetPath.ToString());
+		CSVContent += TEXT(",");
 		CSVContent += EscapeCSVField(RowData->AssetName);
 
 		for (FProperty* Prop : Model->GetColumnProperties())
 		{
 			CSVContent += TEXT(",");
-			if (RowData->IsLoaded())
+			const FString* Cached = RowData->CachedDisplayText.Find(Prop->GetFName());
+			if (Cached)
 			{
-				FString ValueText = Model->GetPropertyValueText(RowData->Asset.Get(), Prop);
-				CSVContent += EscapeCSVField(ValueText);
+				CSVContent += EscapeCSVField(*Cached);
 			}
 		}
 		CSVContent += TEXT("\n");
@@ -1220,15 +1225,32 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 
 	// ヘッダー行を取得 / Get header row
 	const TArray<FString>& Headers = Records[0];
-	if (Headers.Num() < 2 || Headers[0] != TEXT("AssetName"))
+	if (Headers.Num() < 2)
 	{
-		UE_LOG(LogDataAssetSheetEditor, Error, TEXT("Invalid CSV header: first column must be 'AssetName'"));
+		UE_LOG(LogDataAssetSheetEditor, Error, TEXT("Invalid CSV header: at least 2 columns required"));
+		return FReply::Handled();
+	}
+
+	// 第1列で形式を判定 / Detect format from first column
+	const bool bPathKeyed = (Headers[0] == TEXT("AssetPath"));
+	const bool bLegacyNameKeyed = (Headers[0] == TEXT("AssetName"));
+	if (!bPathKeyed && !bLegacyNameKeyed)
+	{
+		UE_LOG(LogDataAssetSheetEditor, Error, TEXT("Invalid CSV header: first column must be 'AssetPath' or 'AssetName'"));
+		return FReply::Handled();
+	}
+
+	// AssetPath 形式の場合は第2列の AssetName をスキップ / In path-keyed format, skip the AssetName label column
+	const int32 PropertyStartCol = bPathKeyed ? 2 : 1;
+	if (Headers.Num() < PropertyStartCol)
+	{
+		UE_LOG(LogDataAssetSheetEditor, Error, TEXT("Invalid CSV header: missing AssetName column"));
 		return FReply::Handled();
 	}
 
 	// ヘッダーからプロパティをマッピング / Map headers to properties
 	TArray<FProperty*> ImportProperties;
-	for (int32 i = 1; i < Headers.Num(); ++i)
+	for (int32 i = PropertyStartCol; i < Headers.Num(); ++i)
 	{
 		FProperty* FoundProp = nullptr;
 		for (FProperty* Prop : Model->GetColumnProperties())
@@ -1242,11 +1264,28 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 		ImportProperties.Add(FoundProp); // nullの場合はスキップされる / null entries will be skipped
 	}
 
+	// 検索用マップを構築 / Build lookup maps for O(1) row matching
+	TMap<FSoftObjectPath, TSharedPtr<FDataAssetRowData>> PathToRow;
+	TMap<FString, TSharedPtr<FDataAssetRowData>> NameToRow;
+	for (const TSharedPtr<FDataAssetRowData>& RowData : Model->GetRowDataList())
+	{
+		PathToRow.Add(RowData->AssetPath, RowData);
+		if (bLegacyNameKeyed && NameToRow.Contains(RowData->AssetName))
+		{
+			UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("Duplicate asset name '%s' found while importing legacy CSV; first match wins"), *RowData->AssetName);
+		}
+		else
+		{
+			NameToRow.Add(RowData->AssetName, RowData);
+		}
+	}
+
 	// Undo対応のトランザクション開始 / Begin undo transaction
 	FScopedTransaction Transaction(LOCTEXT("ImportCSV", "Import CSV"));
 
 	int32 SuccessCount = 0;
 	int32 FailCount = 0;
+	TArray<TSharedPtr<FDataAssetRowData>> ModifiedRows;
 
 	// データ行をインポート / Import data rows
 	for (int32 RecordIndex = 1; RecordIndex < Records.Num(); ++RecordIndex)
@@ -1257,32 +1296,36 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 			continue;
 		}
 
-		FString AssetName = Fields[0];
-
-		// アセット名で行を検索 / Find row by asset name
-		TSharedPtr<FDataAssetRowData>* FoundRow = nullptr;
-		for (TSharedPtr<FDataAssetRowData>& RowData : Model->GetMutableRowDataList())
+		// キーで行を検索 / Find row by key
+		TSharedPtr<FDataAssetRowData> FoundRow;
+		if (bPathKeyed)
 		{
-			if (RowData->AssetName == AssetName)
+			if (TSharedPtr<FDataAssetRowData>* Ptr = PathToRow.Find(FSoftObjectPath(Fields[0])))
 			{
-				FoundRow = &RowData;
-				break;
+				FoundRow = *Ptr;
+			}
+		}
+		else
+		{
+			if (TSharedPtr<FDataAssetRowData>* Ptr = NameToRow.Find(Fields[0]))
+			{
+				FoundRow = *Ptr;
 			}
 		}
 
-		if (!FoundRow || !(*FoundRow)->IsLoaded())
+		if (!FoundRow.IsValid() || !FoundRow->IsLoaded())
 		{
 			++FailCount;
 			continue;
 		}
 
-		UDataAsset* Asset = (*FoundRow)->Asset.Get();
+		UDataAsset* Asset = FoundRow->Asset.Get();
 		Asset->Modify();
 
 		// 各プロパティの値をインポート / Import each property value
 		for (int32 PropIndex = 0; PropIndex < ImportProperties.Num(); ++PropIndex)
 		{
-			int32 FieldIndex = PropIndex + 1; // +1 for AssetName column
+			int32 FieldIndex = PropIndex + PropertyStartCol;
 			if (FieldIndex >= Fields.Num() || !ImportProperties[PropIndex])
 			{
 				continue;
@@ -1304,7 +1347,14 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 		}
 
 		Asset->MarkPackageDirty();
+		ModifiedRows.Add(FoundRow);
 		++SuccessCount;
+	}
+
+	// 編集された行のキャッシュを更新 / Refresh display text cache for modified rows
+	for (const TSharedPtr<FDataAssetRowData>& Row : ModifiedRows)
+	{
+		Model->RebuildRowCache(Row);
 	}
 
 	// テーブル更新（フィルタ保持）/ Refresh table (preserve filter)
