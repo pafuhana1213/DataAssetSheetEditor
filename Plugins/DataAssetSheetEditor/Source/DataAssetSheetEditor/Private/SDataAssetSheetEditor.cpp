@@ -40,6 +40,7 @@
 #include "Widgets/Notifications/SNotificationList.h"
 #include "AssetThumbnail.h"
 #include "Widgets/Colors/SColorBlock.h"
+#include "GameplayTagContainer.h"
 
 #define LOCTEXT_NAMESPACE "SDataAssetSheetEditor"
 
@@ -351,6 +352,71 @@ public:
 									})
 									.Size(FVector2D(60.0f, 18.0f))
 									.ShowBackgroundForAlpha(true)
+							];
+					}
+
+					// GameplayTag: タグ名のみをテキスト表示 / Show tag name only, empty for None
+					if (StructProp->Struct == FGameplayTag::StaticStruct())
+					{
+						return SNew(SBox)
+							.Padding(FMargin(4.0f, 2.0f))
+							.VAlign(VAlign_Center)
+							[
+								SNew(STextBlock)
+									.Text_Lambda([WeakRowData, WeakModel, CapturedProp]() -> FText
+									{
+										TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
+										TSharedPtr<FDataAssetSheetModel> PinnedModel = WeakModel.Pin();
+										if (!PinnedRow.IsValid() || !PinnedModel.IsValid() || !PinnedRow->IsLoaded()
+											|| !PinnedModel->AssetHasProperty(PinnedRow->Asset.Get(), CapturedProp))
+										{
+											return FText::GetEmpty();
+										}
+										const FStructProperty* Sp = CastField<FStructProperty>(CapturedProp);
+										const FGameplayTag* TagPtr = Sp->ContainerPtrToValuePtr<FGameplayTag>(PinnedRow->Asset.Get());
+										if (!TagPtr || !TagPtr->IsValid())
+										{
+											return FText::GetEmpty();
+										}
+										return FText::FromName(TagPtr->GetTagName());
+									})
+									.ColorAndOpacity(this, &SDataAssetSheetRow::GetRowTextColor)
+							];
+					}
+
+					// GameplayTagContainer: 含まれるタグを改行区切りで表示 / Newline-joined tag names
+					if (StructProp->Struct == FGameplayTagContainer::StaticStruct())
+					{
+						return SNew(SBox)
+							.Padding(FMargin(4.0f, 2.0f))
+							.VAlign(VAlign_Center)
+							[
+								SNew(STextBlock)
+									.Text_Lambda([WeakRowData, WeakModel, CapturedProp]() -> FText
+									{
+										TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
+										TSharedPtr<FDataAssetSheetModel> PinnedModel = WeakModel.Pin();
+										if (!PinnedRow.IsValid() || !PinnedModel.IsValid() || !PinnedRow->IsLoaded()
+											|| !PinnedModel->AssetHasProperty(PinnedRow->Asset.Get(), CapturedProp))
+										{
+											return FText::GetEmpty();
+										}
+										const FStructProperty* Sp = CastField<FStructProperty>(CapturedProp);
+										const FGameplayTagContainer* ContainerPtr = Sp->ContainerPtrToValuePtr<FGameplayTagContainer>(PinnedRow->Asset.Get());
+										if (!ContainerPtr || ContainerPtr->IsEmpty())
+										{
+											return FText::GetEmpty();
+										}
+										TArray<FString> Names;
+										Names.Reserve(ContainerPtr->Num());
+										for (const FGameplayTag& T : *ContainerPtr)
+										{
+											Names.Add(T.GetTagName().ToString());
+										}
+										return FText::FromString(FString::Join(Names, TEXT("\n")));
+									})
+									.ColorAndOpacity(this, &SDataAssetSheetRow::GetRowTextColor)
+									.AutoWrapText(false)
 							];
 					}
 				}

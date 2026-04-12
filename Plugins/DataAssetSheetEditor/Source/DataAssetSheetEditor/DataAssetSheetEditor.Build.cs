@@ -35,6 +35,7 @@ public class DataAssetSheetEditor : ModuleRules
 				"AssetTools",
 				"ApplicationCore",
 				"Json",
+				"GameplayTags",
 			}
 		);
 	}
