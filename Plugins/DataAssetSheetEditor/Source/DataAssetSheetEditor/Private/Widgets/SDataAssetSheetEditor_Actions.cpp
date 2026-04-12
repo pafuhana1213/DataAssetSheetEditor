@@ -43,6 +43,7 @@
 #include "Framework/Notifications/NotificationManager.h"
 #include "Widgets/Notifications/SNotificationList.h"
 #include "AssetThumbnail.h"
+#include "ScopedTransaction.h"
 
 #define LOCTEXT_NAMESPACE "SDataAssetSheetEditor"
 
@@ -247,6 +248,10 @@ void SDataAssetSheetEditor::RemoveSelectedFromManualAssets()
 		}
 	}
 
+	// Undo対応 / Undo support
+	FScopedTransaction Transaction(LOCTEXT("RemoveFromManualAssetsTransaction", "Remove Assets from Sheet"));
+	Sheet->Modify();
+
 	// ManualAssetsから除外 / Remove from ManualAssets
 	Sheet->ManualAssets.RemoveAll([&PathsToRemove](const TSoftObjectPtr<UDataAsset>& SoftPtr)
 	{
@@ -420,6 +425,10 @@ FReply SDataAssetSheetEditor::HandleDrop(const FGeometry& MyGeometry, const FDra
 	}
 
 	int32 AddedCount = 0;
+
+	// Undo対応 / Undo support
+	FScopedTransaction Transaction(LOCTEXT("AddDroppedAssets", "Add Dropped Assets to Sheet"));
+	Sheet->Modify();
 
 	// ManualAssets内の既存パスセットを構築（重複防止用）/ Build set of existing ManualAsset paths
 	TSet<FSoftObjectPath> ExistingManualPaths;
