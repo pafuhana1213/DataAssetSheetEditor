@@ -28,6 +28,10 @@ struct FDataAssetRowData
 	// ロード済みアセット参照 / Loaded asset reference (valid after async load completes)
 	TWeakObjectPtr<UDataAsset> Asset;
 
+	// アセットのクラス（ロード前でもアセットレジストリから取得可能）
+	// Asset class resolved from AssetRegistry (available before the asset itself is loaded)
+	TWeakObjectPtr<UClass> AssetClass;
+
 	bool IsLoaded() const { return Asset.IsValid(); }
 };
 
@@ -63,6 +67,9 @@ public:
 
 	// アセットが指定プロパティを所有するクラスか判定 / Check if asset's class owns the given property
 	bool AssetHasProperty(UDataAsset* InAsset, FProperty* InProperty) const;
+
+	// クラスが指定プロパティを所有するか判定（ロード不要）/ Class-based check (no asset load required)
+	bool ClassHasProperty(UClass* InClass, FProperty* InProperty) const;
 
 	// フィルタ適用 / Apply text filter to row data
 	void ApplyFilter(const FString& InFilterText);

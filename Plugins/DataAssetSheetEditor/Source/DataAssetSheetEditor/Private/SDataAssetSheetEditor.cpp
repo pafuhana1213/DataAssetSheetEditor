@@ -135,7 +135,11 @@ public:
 
 				// アセットがこのプロパティを持たない場合は黒塗りセルを表示
 				// Show blacked-out cell when asset doesn't own this property (base class row for derived-class column)
-				if (RowData->IsLoaded() && !Model->AssetHasProperty(RowData->Asset.Get(), Prop))
+				// 非同期ロード完了前でもレジストリから解決したクラスで判定できるようにする
+				UClass* RowClass = RowData->Asset.IsValid()
+					? RowData->Asset->GetClass()
+					: RowData->AssetClass.Get();
+				if (RowClass && !Model->ClassHasProperty(RowClass, Prop))
 				{
 					static const FSlateColorBrush BlackBrush(FLinearColor(0.02f, 0.02f, 0.02f, 1.0f));
 					return SNew(SBox)

@@ -31,6 +31,14 @@ void FDataAssetSheetModel::AddRowDataFromAssetData(const FAssetData& AssetData, 
 	TSharedPtr<FDataAssetRowData> RowData = MakeShared<FDataAssetRowData>();
 	RowData->AssetPath = Path;
 	RowData->AssetName = AssetData.AssetName.ToString();
+
+	// クラス情報をレジストリから取得（アセット本体はロードせずクラスのみ解決）
+	// Resolve asset class from AssetRegistry without loading the asset itself
+	if (UClass* ResolvedClass = AssetData.GetClass())
+	{
+		RowData->AssetClass = ResolvedClass;
+	}
+
 	RowDataList.Add(RowData);
 }
 
@@ -214,13 +222,18 @@ void FDataAssetSheetModel::BuildColumnList(UClass* InTargetClass)
 
 bool FDataAssetSheetModel::AssetHasProperty(UDataAsset* InAsset, FProperty* InProperty) const
 {
-	if (!InAsset || !InProperty)
+	return InAsset && ClassHasProperty(InAsset->GetClass(), InProperty);
+}
+
+bool FDataAssetSheetModel::ClassHasProperty(UClass* InClass, FProperty* InProperty) const
+{
+	if (!InClass || !InProperty)
 	{
 		return false;
 	}
 
 	UClass* OwnerClass = InProperty->GetOwnerClass();
-	return OwnerClass && InAsset->GetClass()->IsChildOf(OwnerClass);
+	return OwnerClass && InClass->IsChildOf(OwnerClass);
 }
 
 FString FDataAssetSheetModel::GetPropertyValueText(UDataAsset* InAsset, FProperty* InProperty) const
