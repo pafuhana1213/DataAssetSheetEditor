@@ -38,8 +38,132 @@
 #include "DragAndDrop/AssetDragDropOp.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "Widgets/Notifications/SNotificationList.h"
+#include "AssetThumbnail.h"
+#include "Widgets/Colors/SColorBlock.h"
 
 #define LOCTEXT_NAMESPACE "SDataAssetSheetEditor"
+
+// Object/Texture セル用ウィジェット / Asset thumbnail cell with in-place swap detection.
+// 詳細パネルでアセットが差し替わったとき、SListView が行ウィジェットを使い回しても
+// Tick で値変化を検知してサムネ/プレースホルダを差し替える。
+class SObjectThumbnailCell : public SCompoundWidget
+{
+public:
+	SLATE_BEGIN_ARGS(SObjectThumbnailCell) {}
+		SLATE_ARGUMENT(TWeakPtr<FDataAssetRowData>, RowData)
+		SLATE_ARGUMENT(TWeakPtr<FDataAssetSheetModel>, Model)
+		SLATE_ARGUMENT(FProperty*, Property)
+		SLATE_ARGUMENT(TSharedPtr<FAssetThumbnailPool>, ThumbnailPool)
+	SLATE_END_ARGS()
+
+	void Construct(const FArguments& InArgs)
+	{
+		WeakRowData = InArgs._RowData;
+		WeakModel = InArgs._Model;
+		Property = InArgs._Property;
+		ThumbnailPool = InArgs._ThumbnailPool;
+
+		ChildSlot
+		[
+			SAssignNew(ContentBox, SBox)
+		];
+
+		RebuildContent(ResolveCurrentAssetPath());
+	}
+
+	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override
+	{
+		SCompoundWidget::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
+
+		const FSoftObjectPath CurrentPath = ResolveCurrentAssetPath();
+		if (CurrentPath != LastPath)
+		{
+			RebuildContent(CurrentPath);
+		}
+	}
+
+private:
+	FSoftObjectPath ResolveCurrentAssetPath() const
+	{
+		TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
+		TSharedPtr<FDataAssetSheetModel> PinnedModel = WeakModel.Pin();
+		if (!PinnedRow.IsValid() || !PinnedModel.IsValid() || !PinnedRow->IsLoaded() || Property == nullptr)
+		{
+			return FSoftObjectPath();
+		}
+		if (!PinnedModel->AssetHasProperty(PinnedRow->Asset.Get(), Property))
+		{
+			return FSoftObjectPath();
+		}
+
+		if (const FObjectProperty* ObjectProp = CastField<FObjectProperty>(Property))
+		{
+			UObject* Value = ObjectProp->GetObjectPropertyValue_InContainer(PinnedRow->Asset.Get());
+			return Value ? FSoftObjectPath(Value) : FSoftObjectPath();
+		}
+		if (const FSoftObjectProperty* SoftProp = CastField<FSoftObjectProperty>(Property))
+		{
+			const FSoftObjectPtr* SoftPtr = SoftProp->ContainerPtrToValuePtr<FSoftObjectPtr>(PinnedRow->Asset.Get());
+			return SoftPtr ? SoftPtr->ToSoftObjectPath() : FSoftObjectPath();
+		}
+		return FSoftObjectPath();
+	}
+
+	void RebuildContent(const FSoftObjectPath& NewPath)
+	{
+		LastPath = NewPath;
+
+		if (!NewPath.IsValid())
+		{
+			Thumbnail.Reset();
+			ContentBox->SetContent(
+				SNew(SBox)
+					.Padding(FMargin(4.0f, 2.0f))
+					.VAlign(VAlign_Center)
+					[
+						SNew(STextBlock)
+							.Text(LOCTEXT("NullAsset", "-"))
+							.ColorAndOpacity(FSlateColor(FLinearColor(0.5f, 0.5f, 0.5f, 1.0f)))
+					]
+			);
+			SetToolTipText(FText::GetEmpty());
+			return;
+		}
+
+		// AssetRegistry 経由で FAssetData を解決すれば未ロードのソフト参照でもサムネを出せる
+		FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
+		FAssetData AssetData = AssetRegistryModule.Get().GetAssetByObjectPath(NewPath);
+
+		Thumbnail = MakeShared<FAssetThumbnail>(AssetData, 24, 24, ThumbnailPool);
+
+		FAssetThumbnailConfig ThumbConfig;
+		ThumbConfig.bAllowFadeIn = true;
+
+		ContentBox->SetContent(
+			SNew(SBox)
+				.Padding(FMargin(4.0f, 2.0f))
+				.HAlign(HAlign_Left)
+				.VAlign(VAlign_Center)
+				[
+					SNew(SBox)
+						.WidthOverride(24.0f)
+						.HeightOverride(24.0f)
+						[
+							Thumbnail->MakeThumbnailWidget(ThumbConfig)
+						]
+				]
+		);
+		SetToolTipText(FText::FromString(NewPath.ToString()));
+	}
+
+	TWeakPtr<FDataAssetRowData> WeakRowData;
+	TWeakPtr<FDataAssetSheetModel> WeakModel;
+	FProperty* Property = nullptr;
+	TSharedPtr<FAssetThumbnailPool> ThumbnailPool;
+	TSharedPtr<FAssetThumbnail> Thumbnail;
+	FSoftObjectPath LastPath;
+	TSharedPtr<SBox> ContentBox;
+};
 
 // テーブル行ウィジェット / Table row widget (private to this translation unit)
 class SDataAssetSheetRow : public SMultiColumnTableRow<TSharedPtr<FDataAssetRowData>>
@@ -53,12 +177,14 @@ public:
 
 	void Construct(const FArguments& InArgs, const TSharedRef<STableViewBase>& InOwnerTable,
 		TSharedPtr<FDataAssetRowData> InRowData, TSharedPtr<FDataAssetSheetModel> InModel,
-		TSharedPtr<SListView<TSharedPtr<FDataAssetRowData>>> InListView)
+		TSharedPtr<SListView<TSharedPtr<FDataAssetRowData>>> InListView,
+		TSharedPtr<FAssetThumbnailPool> InThumbnailPool)
 	{
 		RowData = InRowData;
 		Model = InModel;
 		IndexInList = InArgs._IndexInList;
 		OwnerListView = InListView;
+		ThumbnailPool = InThumbnailPool;
 		SMultiColumnTableRow::Construct(FSuperRowType::FArguments(), InOwnerTable);
 	}
 
@@ -82,6 +208,17 @@ public:
 	}
 
 	virtual TSharedRef<SWidget> GenerateWidgetForColumn(const FName& ColumnId) override
+	{
+		// 全セルを一定の最小高でラップして行高を底上げ (Color/Texture 等のリッチセル用)
+		return SNew(SBox)
+			.MinDesiredHeight(28.0f)
+			.VAlign(VAlign_Center)
+			[
+				GenerateCellContent(ColumnId)
+			];
+	}
+
+	TSharedRef<SWidget> GenerateCellContent(const FName& ColumnId)
 	{
 		// アセット名列（未保存時は * 表示）/ Asset name column with unsaved indicator
 		if (ColumnId == "AssetName")
@@ -182,6 +319,101 @@ public:
 						];
 				}
 
+				// Color/LinearColor: 表示専用の横長カラーバー / Display-only color swatch
+				if (const FStructProperty* StructProp = CastField<FStructProperty>(Prop))
+				{
+					const bool bIsLinearColor = StructProp->Struct == TBaseStructure<FLinearColor>::Get();
+					const bool bIsColor = StructProp->Struct == TBaseStructure<FColor>::Get();
+					if (bIsLinearColor || bIsColor)
+					{
+						return SNew(SBox)
+							.Padding(FMargin(4.0f, 4.0f))
+							.HAlign(HAlign_Fill)
+							.VAlign(VAlign_Center)
+							[
+								SNew(SColorBlock)
+									.Color_Lambda([WeakRowData, WeakModel, CapturedProp, bIsLinearColor]() -> FLinearColor
+									{
+										TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
+										TSharedPtr<FDataAssetSheetModel> PinnedModel = WeakModel.Pin();
+										if (PinnedRow.IsValid() && PinnedModel.IsValid() && PinnedRow->IsLoaded()
+											&& PinnedModel->AssetHasProperty(PinnedRow->Asset.Get(), CapturedProp))
+										{
+											const FStructProperty* Sp = CastField<FStructProperty>(CapturedProp);
+											const void* ValuePtr = Sp->ContainerPtrToValuePtr<void>(PinnedRow->Asset.Get());
+											if (bIsLinearColor)
+											{
+												return *static_cast<const FLinearColor*>(ValuePtr);
+											}
+											return static_cast<const FColor*>(ValuePtr)->ReinterpretAsLinear();
+										}
+										return FLinearColor::Transparent;
+									})
+									.Size(FVector2D(60.0f, 18.0f))
+									.ShowBackgroundForAlpha(true)
+							];
+					}
+				}
+
+				// Object/Texture 参照 (ハード/ソフト両対応): サムネイル表示
+				// Asset thumbnail cell — handles FObjectProperty and FSoftObjectProperty, in-place swaps via Tick
+				if (CastField<FObjectProperty>(Prop) || CastField<FSoftObjectProperty>(Prop))
+				{
+					return SNew(SObjectThumbnailCell)
+						.RowData(WeakRowData)
+						.Model(WeakModel)
+						.Property(CapturedProp)
+						.ThumbnailPool(ThumbnailPool);
+				}
+
+				// Enum: セル表示のみ DisplayName に整形 / Enum cell shows DisplayName (CSV path unchanged)
+				{
+					UEnum* EnumPtr = nullptr;
+					if (const FEnumProperty* EnumProp = CastField<FEnumProperty>(Prop))
+					{
+						EnumPtr = EnumProp->GetEnum();
+					}
+					else if (const FByteProperty* ByteProp = CastField<FByteProperty>(Prop))
+					{
+						EnumPtr = ByteProp->Enum;
+					}
+
+					if (EnumPtr)
+					{
+						UEnum* CapturedEnum = EnumPtr;
+						return SNew(SBox)
+							.Padding(FMargin(4.0f, 2.0f))
+							.VAlign(VAlign_Center)
+							[
+								SNew(STextBlock)
+									.Text_Lambda([WeakRowData, WeakModel, CapturedProp, CapturedEnum]() -> FText
+									{
+										TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
+										TSharedPtr<FDataAssetSheetModel> PinnedModel = WeakModel.Pin();
+										if (!PinnedRow.IsValid() || !PinnedModel.IsValid() || !PinnedRow->IsLoaded()
+											|| !PinnedModel->AssetHasProperty(PinnedRow->Asset.Get(), CapturedProp))
+										{
+											return FText::GetEmpty();
+										}
+
+										int64 IntValue = 0;
+										if (const FEnumProperty* Ep = CastField<FEnumProperty>(CapturedProp))
+										{
+											const void* ValuePtr = Ep->ContainerPtrToValuePtr<void>(PinnedRow->Asset.Get());
+											IntValue = Ep->GetUnderlyingProperty()->GetSignedIntPropertyValue(ValuePtr);
+										}
+										else if (const FByteProperty* Bp = CastField<FByteProperty>(CapturedProp))
+										{
+											const void* ValuePtr = Bp->ContainerPtrToValuePtr<void>(PinnedRow->Asset.Get());
+											IntValue = static_cast<int64>(Bp->GetPropertyValue(ValuePtr));
+										}
+										return CapturedEnum->GetDisplayNameTextByValue(IntValue);
+									})
+									.ColorAndOpacity(this, &SDataAssetSheetRow::GetRowTextColor)
+							];
+					}
+				}
+
 				// その他のプロパティはTAttributeでリアルタイム更新 / Other properties with TAttribute for real-time updates
 				return SNew(SBox)
 					.Padding(FMargin(4.0f, 2.0f))
@@ -224,6 +456,7 @@ private:
 	TSharedPtr<FDataAssetRowData> RowData;
 	TSharedPtr<FDataAssetSheetModel> Model;
 	TSharedPtr<SListView<TSharedPtr<FDataAssetRowData>>> OwnerListView;
+	TSharedPtr<FAssetThumbnailPool> ThumbnailPool;
 	int32 IndexInList = 0;
 };
 
@@ -310,6 +543,9 @@ void SDataAssetSheetEditor::Construct(const FArguments& InArgs)
 	DataAssetSheet = InArgs._DataAssetSheet;
 	Model = MakeShared<FDataAssetSheetModel>();
 
+	// セル用サムネイルプール / Shared thumbnail pool for Object/Texture cells
+	ThumbnailPool = MakeShared<FAssetThumbnailPool>(128);
+
 	// DetailsView作成 / Create the details view panel
 	FPropertyEditorModule& PropertyEditorModule = FModuleManager::GetModuleChecked<FPropertyEditorModule>("PropertyEditor");
 	FDetailsViewArgs DetailsViewArgs;
@@ -325,6 +561,7 @@ void SDataAssetSheetEditor::Construct(const FArguments& InArgs)
 	HeaderRow = SNew(SHeaderRow);
 
 	// ListView作成（フィルタ済みリストをソースとする）/ Create list view with filtered list as source
+	// 行高は各セルの SBox::MinDesiredHeight で底上げする (ItemHeight は Tile 用で非推奨)
 	AssetListView = SNew(SListView<TSharedPtr<FDataAssetRowData>>)
 		.ListItemsSource(&Model->GetFilteredRowDataList())
 		.OnGenerateRow(this, &SDataAssetSheetEditor::OnGenerateRow)
@@ -508,6 +745,8 @@ SDataAssetSheetEditor::~SDataAssetSheetEditor()
 	{
 		Model->CancelLoading();
 	}
+
+	ThumbnailPool.Reset();
 }
 
 void SDataAssetSheetEditor::OnSettingsChanged()
@@ -609,7 +848,7 @@ void SDataAssetSheetEditor::RebuildHeaderRow()
 TSharedRef<ITableRow> SDataAssetSheetEditor::OnGenerateRow(TSharedPtr<FDataAssetRowData> InRowData, const TSharedRef<STableViewBase>& OwnerTable)
 {
 	const int32 Index = Model->GetFilteredRowDataList().IndexOfByKey(InRowData);
-	return SNew(SDataAssetSheetRow, OwnerTable, InRowData, Model, AssetListView)
+	return SNew(SDataAssetSheetRow, OwnerTable, InRowData, Model, AssetListView, ThumbnailPool)
 		.IndexInList(Index);
 }
 

@@ -7,11 +7,13 @@
 #include "Widgets/Views/SListView.h"
 #include "Widgets/Views/SHeaderRow.h"
 #include "Dom/JsonObject.h"
+#include "AssetThumbnail.h"
 
 class UDataAssetSheet;
 class FDataAssetSheetModel;
 struct FDataAssetRowData;
 class IDetailsView;
+class FAssetThumbnailPool;
 
 /**
  * メインスプレッドシートエディタウィジェット / Main spreadsheet editor widget
@@ -156,4 +158,7 @@ private:
 	// レイアウトデータ / Layout data (column widths, hidden columns)
 	TSharedPtr<FJsonObject> LayoutData;
 	TSet<FName> HiddenColumns;
+
+	// セル描画用のサムネイルプール / Thumbnail pool shared across rows for Object/Texture cells
+	TSharedPtr<FAssetThumbnailPool> ThumbnailPool;
 };
