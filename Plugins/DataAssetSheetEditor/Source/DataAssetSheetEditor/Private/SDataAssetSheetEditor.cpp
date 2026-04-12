@@ -45,6 +45,10 @@
 DECLARE_CYCLE_STAT(TEXT("ImportCSV"), STAT_DataAssetSheet_ImportCSV, STATGROUP_DataAssetSheet);
 DECLARE_CYCLE_STAT(TEXT("ExportCSV"), STAT_DataAssetSheet_ExportCSV, STATGROUP_DataAssetSheet);
 
+// 列幅の既定値と最小値 / Default and minimum column widths (pixels)
+static constexpr float DefaultColumnWidth = 150.0f;
+static constexpr float MinColumnWidth = 32.0f;
+
 #define LOCTEXT_NAMESPACE "SDataAssetSheetEditor"
 
 // Object/Texture セル用ウィジェット / Asset thumbnail cell with in-place swap detection.
@@ -917,18 +921,34 @@ void SDataAssetSheetEditor::RebuildHeaderRow()
 
 void SDataAssetSheetEditor::ApplyColumnWidth(SHeaderRow::FColumn::FArguments& OutArgs, FName ColumnId) const
 {
-	if (const float* SavedWidth = ColumnWidths.Find(ColumnId))
-	{
-		OutArgs.ManualWidth(*SavedWidth);
-	}
-	else
-	{
-		OutArgs.FillWidth(1.0f);
-	}
+	// 常に Manual モードで TAttribute をバインドし、ドラッグ後の幅変更が
+	// 即座に再描画されるようにする（OnWidthChanged が bound だと内部 Width
+	// は更新されないため、属性側を動的に読む必要がある）
+	// Always use Manual mode with a bound attribute so that dragging updates
+	// the visual width (when OnWidthChanged is bound, SHeaderRow does not
+	// touch its internal Width — the attribute must be dynamic).
+	TWeakPtr<const SDataAssetSheetEditor> WeakSelf = SharedThis(this);
+	OutArgs.ManualWidth(TAttribute<float>::Create(TAttribute<float>::FGetter::CreateLambda(
+		[WeakSelf, ColumnId]() -> float
+		{
+			if (TSharedPtr<const SDataAssetSheetEditor> Pinned = WeakSelf.Pin())
+			{
+				if (const float* W = Pinned->ColumnWidths.Find(ColumnId))
+				{
+					return *W;
+				}
+			}
+			return DefaultColumnWidth;
+		})));
 }
 
 void SDataAssetSheetEditor::OnColumnWidthChanged(float NewWidth, FName ColumnId)
 {
+	// 極端に小さい値は無視（誤操作対策）/ Reject pathological tiny widths
+	if (NewWidth < MinColumnWidth)
+	{
+		NewWidth = MinColumnWidth;
+	}
 	ColumnWidths.Add(ColumnId, NewWidth);
 }
 
@@ -2029,13 +2049,17 @@ void SDataAssetSheetEditor::LoadLayoutData()
 		}
 	}
 
-	// 列幅を復元 / Restore column widths
+	// 列幅を復元（極端に小さい値は破棄）/ Restore column widths, dropping pathological values
 	if (LayoutData->HasField(TEXT("ColumnWidths")))
 	{
 		const TSharedPtr<FJsonObject>& WidthsObj = LayoutData->GetObjectField(TEXT("ColumnWidths"));
 		for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : WidthsObj->Values)
 		{
-			ColumnWidths.Add(FName(*Pair.Key), static_cast<float>(Pair.Value->AsNumber()));
+			const float Width = static_cast<float>(Pair.Value->AsNumber());
+			if (Width >= MinColumnWidth)
+			{
+				ColumnWidths.Add(FName(*Pair.Key), Width);
+			}
 		}
 	}
 
