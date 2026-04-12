@@ -300,6 +300,22 @@ void FDataAssetSheetModel::RebuildRowCache(const TSharedPtr<FDataAssetRowData>& 
 	}
 }
 
+void FDataAssetSheetModel::RebuildRowCacheForProperty(const TSharedPtr<FDataAssetRowData>& RowData, FProperty* InProperty) const
+{
+	if (!RowData.IsValid() || InProperty == nullptr || !RowData->IsLoaded())
+	{
+		return;
+	}
+
+	UDataAsset* Asset = RowData->Asset.Get();
+	if (!ClassHasProperty(Asset->GetClass(), InProperty))
+	{
+		return;
+	}
+
+	RowData->CachedDisplayText.Add(InProperty->GetFName(), GetPropertyValueText(Asset, InProperty));
+}
+
 void FDataAssetSheetModel::RebuildAllRowCaches() const
 {
 	for (const TSharedPtr<FDataAssetRowData>& RowData : RowDataList)

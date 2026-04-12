@@ -72,6 +72,9 @@ public:
 	// 行の表示文字列キャッシュを再構築 / Rebuild cached display text for a single row
 	void RebuildRowCache(const TSharedPtr<FDataAssetRowData>& RowData) const;
 
+	// 行の特定プロパティだけキャッシュを更新 / Rebuild cached display text for a single property on a row
+	void RebuildRowCacheForProperty(const TSharedPtr<FDataAssetRowData>& RowData, FProperty* InProperty) const;
+
 	// 全行の表示文字列キャッシュを再構築 / Rebuild cached display text for every row
 	void RebuildAllRowCaches() const;
 

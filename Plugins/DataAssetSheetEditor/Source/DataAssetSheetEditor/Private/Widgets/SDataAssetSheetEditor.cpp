@@ -595,9 +595,22 @@ void SDataAssetSheetEditor::OnDetailsPropertyChanged(const FPropertyChangedEvent
 	// Refresh display text cache for edited rows so filter/sort stay consistent
 	if (Model.IsValid())
 	{
+		// 変更されたトップレベルプロパティのみ再構築し全列再計算を回避
+		// Only rebuild the cache entry for the edited top-level property to avoid full per-row recomputation
+		FProperty* ChangedProperty = PropertyChangedEvent.MemberProperty
+			? PropertyChangedEvent.MemberProperty
+			: PropertyChangedEvent.Property;
+
 		for (const TSharedPtr<FDataAssetRowData>& Item : AssetListView->GetSelectedItems())
 		{
-			Model->RebuildRowCache(Item);
+			if (ChangedProperty)
+			{
+				Model->RebuildRowCacheForProperty(Item, ChangedProperty);
+			}
+			else
+			{
+				Model->RebuildRowCache(Item);
+			}
 		}
 	}
 
