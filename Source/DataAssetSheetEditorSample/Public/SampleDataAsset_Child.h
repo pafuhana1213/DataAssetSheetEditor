@@ -7,6 +7,16 @@
 #include "Engine/Texture2D.h"
 #include "SampleDataAsset_Child.generated.h"
 
+/** キャラクター種別 / Character archetype for enum cell display test */
+UENUM(BlueprintType)
+enum class ESampleCharacterType : uint8
+{
+	Warrior    UMETA(DisplayName = "戦士"),
+	Mage       UMETA(DisplayName = "魔法使い"),
+	Rogue      UMETA(DisplayName = "盗賊"),
+	Cleric     UMETA(DisplayName = "僧侶"),
+};
+
 /**
  * USampleDataAssetの派生クラス / Child class of USampleDataAsset
  * 派生クラスのシート表示テスト用に追加プロパティを持つ
@@ -24,6 +34,10 @@ public:
 	// アイコン / Icon texture reference
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance")
 	TSoftObjectPtr<UTexture2D> Icon;
+
+	// 種別 / Character archetype
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Child Stats")
+	ESampleCharacterType CharacterType = ESampleCharacterType::Warrior;
 
 	// レベル / Level
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Child Stats")
