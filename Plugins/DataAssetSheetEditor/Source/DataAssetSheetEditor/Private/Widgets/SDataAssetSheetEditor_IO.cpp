@@ -49,6 +49,20 @@ DECLARE_CYCLE_STAT(TEXT("ExportCSV"), STAT_DataAssetSheet_ExportCSV, STATGROUP_D
 
 #define LOCTEXT_NAMESPACE "SDataAssetSheetEditor"
 
+namespace DataAssetSheetEditorNotify
+{
+	static void ShowFailure(const FText& Message)
+	{
+		FNotificationInfo Info(Message);
+		Info.ExpireDuration = 6.0f;
+		TSharedPtr<SNotificationItem> Notification = FSlateNotificationManager::Get().AddNotification(Info);
+		if (Notification.IsValid())
+		{
+			Notification->SetCompletionState(SNotificationItem::CS_Fail);
+		}
+	}
+}
+
 FReply SDataAssetSheetEditor::OnExportCSVClicked()
 {
 	SCOPE_CYCLE_COUNTER(STAT_DataAssetSheet_ExportCSV);
@@ -160,6 +174,9 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 	if (!FFileHelper::LoadFileToString(CSVContent, *OutFiles[0]))
 	{
 		UE_LOG(LogDataAssetSheetEditor, Error, TEXT("Failed to read CSV file: %s"), *OutFiles[0]);
+		DataAssetSheetEditorNotify::ShowFailure(FText::Format(
+			LOCTEXT("ImportCSVReadFailed", "Failed to read CSV file:\n{0}"),
+			FText::FromString(OutFiles[0])));
 		return FReply::Handled();
 	}
 
@@ -168,6 +185,7 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 	if (Records.Num() < 2)
 	{
 		UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("CSV file has no data rows"));
+		DataAssetSheetEditorNotify::ShowFailure(LOCTEXT("ImportCSVNoRows", "CSV file has no data rows"));
 		return FReply::Handled();
 	}
 
@@ -176,6 +194,7 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 	if (Headers.Num() < 2)
 	{
 		UE_LOG(LogDataAssetSheetEditor, Error, TEXT("Invalid CSV header: at least 2 columns required"));
+		DataAssetSheetEditorNotify::ShowFailure(LOCTEXT("ImportCSVBadHeader", "Invalid CSV header: at least 2 columns required"));
 		return FReply::Handled();
 	}
 
@@ -185,6 +204,7 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 	if (!bPathKeyed && !bLegacyNameKeyed)
 	{
 		UE_LOG(LogDataAssetSheetEditor, Error, TEXT("Invalid CSV header: first column must be 'AssetPath' or 'AssetName'"));
+		DataAssetSheetEditorNotify::ShowFailure(LOCTEXT("ImportCSVBadFirstCol", "Invalid CSV header: first column must be 'AssetPath' or 'AssetName'"));
 		return FReply::Handled();
 	}
 
@@ -193,6 +213,7 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 	if (Headers.Num() < PropertyStartCol)
 	{
 		UE_LOG(LogDataAssetSheetEditor, Error, TEXT("Invalid CSV header: missing AssetName column"));
+		DataAssetSheetEditorNotify::ShowFailure(LOCTEXT("ImportCSVMissingName", "Invalid CSV header: missing AssetName column"));
 		return FReply::Handled();
 	}
 
@@ -310,6 +331,21 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 	AssetListView->RequestListRefresh();
 
 	UE_LOG(LogDataAssetSheetEditor, Log, TEXT("CSV import complete: %d succeeded, %d failed"), SuccessCount, FailCount);
+
+	// 結果を通知（失敗がある場合は警告として表示）/ Notify result, warn if any failures
+	FNotificationInfo Info(FText::Format(
+		LOCTEXT("ImportCSVResult", "CSV import: {0} succeeded, {1} failed"),
+		FText::AsNumber(SuccessCount),
+		FText::AsNumber(FailCount)));
+	Info.ExpireDuration = (FailCount > 0) ? 6.0f : 3.0f;
+	TSharedPtr<SNotificationItem> Notification = FSlateNotificationManager::Get().AddNotification(Info);
+	if (Notification.IsValid())
+	{
+		Notification->SetCompletionState(FailCount > 0
+			? SNotificationItem::CS_Fail
+			: SNotificationItem::CS_Success);
+	}
+
 	return FReply::Handled();
 }
 
