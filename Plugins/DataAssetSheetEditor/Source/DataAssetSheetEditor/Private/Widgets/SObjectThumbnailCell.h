@@ -29,9 +29,9 @@ public:
 
 	void Construct(const FArguments& InArgs);
 
-	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
-
 private:
+	EActiveTimerReturnType PollForChange(double InCurrentTime, float InDeltaTime);
+
 	FSoftObjectPath ResolveCurrentAssetPath() const;
 	void RebuildContent(const FSoftObjectPath& NewPath);
 

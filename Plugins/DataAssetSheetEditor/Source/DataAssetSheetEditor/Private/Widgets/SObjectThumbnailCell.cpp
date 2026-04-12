@@ -17,23 +17,27 @@ void SObjectThumbnailCell::Construct(const FArguments& InArgs)
 	Property = InArgs._Property;
 	ThumbnailPool = InArgs._ThumbnailPool;
 
+	SetCanTick(false);
+
 	ChildSlot
 	[
 		SAssignNew(ContentBox, SBox)
 	];
 
 	RebuildContent(ResolveCurrentAssetPath());
+
+	// 毎フレームではなく 5Hz のアクティブタイマーで差し替えを検知 / Poll at 5Hz instead of per-frame Tick
+	RegisterActiveTimer(0.2f, FWidgetActiveTimerDelegate::CreateSP(this, &SObjectThumbnailCell::PollForChange));
 }
 
-void SObjectThumbnailCell::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime)
+EActiveTimerReturnType SObjectThumbnailCell::PollForChange(double InCurrentTime, float InDeltaTime)
 {
-	SCompoundWidget::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
-
 	const FSoftObjectPath CurrentPath = ResolveCurrentAssetPath();
 	if (CurrentPath != LastPath)
 	{
 		RebuildContent(CurrentPath);
 	}
+	return EActiveTimerReturnType::Continue;
 }
 
 FSoftObjectPath SObjectThumbnailCell::ResolveCurrentAssetPath() const
