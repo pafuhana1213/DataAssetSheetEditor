@@ -6,6 +6,7 @@
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Views/SListView.h"
 #include "Widgets/Views/SHeaderRow.h"
+#include "Types/SlateStructs.h"
 #include "Dom/JsonObject.h"
 #include "AssetThumbnail.h"
 
@@ -14,6 +15,8 @@ class FDataAssetSheetModel;
 struct FDataAssetRowData;
 class IDetailsView;
 class FAssetThumbnailPool;
+class SScrollBox;
+class SDataAssetSheetListView;
 
 /**
  * メインスプレッドシートエディタウィジェット / Main spreadsheet editor widget
@@ -160,9 +163,13 @@ private:
 	// 編集中のアセット / The DataAssetSheet being viewed
 	TWeakObjectPtr<UDataAssetSheet> DataAssetSheet;
 
+	// 表示中の列幅合計を返す（水平スクロール用）/ Sum of visible column widths for horizontal scroll content sizing
+	FOptionalSize GetTableContentWidth() const;
+
 	// UIコンポーネント / UI components
 	TSharedPtr<SHeaderRow> HeaderRow;
-	TSharedPtr<SListView<TSharedPtr<FDataAssetRowData>>> AssetListView;
+	TSharedPtr<SDataAssetSheetListView> AssetListView;
+	TSharedPtr<SScrollBox> HorizontalScrollBox;
 	TSharedPtr<IDetailsView> DetailsView;
 
 	// タブ用ウィジェット / Widgets for separate tabs

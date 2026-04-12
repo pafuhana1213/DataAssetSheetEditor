@@ -1,6 +1,9 @@
 // Copyright 2026 pafuhana1213. All Rights Reserved.
 
 #include "SDataAssetSheetEditor.h"
+#include "SDataAssetSheetListView.h"
+#include "Widgets/Layout/SScrollBox.h"
+#include "Widgets/Layout/SScrollBar.h"
 #include "DataAssetSheet.h"
 #include "DataAssetSheetModel.h"
 #include "DataAssetSheetEditorModule.h"
@@ -633,15 +636,21 @@ void SDataAssetSheetEditor::Construct(const FArguments& InArgs)
 	// HeaderRow初期化 / Initialize header row
 	HeaderRow = SNew(SHeaderRow);
 
+	// 垂直スクロールバーを外部化する / External vertical scrollbar so it stays outside the horizontal scroll area
+	TSharedRef<SScrollBar> VScrollBar = SNew(SScrollBar)
+		.Orientation(Orient_Vertical)
+		.Thickness(FVector2D(12.0f, 12.0f));
+
 	// ListView作成（フィルタ済みリストをソースとする）/ Create list view with filtered list as source
 	// 行高は各セルの SBox::MinDesiredHeight で底上げする (ItemHeight は Tile 用で非推奨)
-	AssetListView = SNew(SListView<TSharedPtr<FDataAssetRowData>>)
+	AssetListView = SNew(SDataAssetSheetListView)
 		.ListItemsSource(&Model->GetFilteredRowDataList())
 		.OnGenerateRow(this, &SDataAssetSheetEditor::OnGenerateRow)
 		.OnSelectionChanged(this, &SDataAssetSheetEditor::OnSelectionChanged)
 		.OnContextMenuOpening(this, &SDataAssetSheetEditor::OnConstructContextMenu)
 		.OnMouseButtonDoubleClick(this, &SDataAssetSheetEditor::OnRowDoubleClicked)
 		.SelectionMode(ESelectionMode::Multi)
+		.ExternalScrollbar(VScrollBar)
 		.HeaderRow(HeaderRow);
 
 	// テーブルウィジェット構築（ドロップターゲット + ツールバー + テーブル + オーバーレイ）/ Build table widget with drop target
@@ -737,10 +746,32 @@ void SDataAssetSheetEditor::Construct(const FArguments& InArgs)
 		[
 			SNew(SOverlay)
 
-			// テーブル本体 / Table
+			// テーブル本体 / Table (horizontal scroll box + external vertical scrollbar)
 			+ SOverlay::Slot()
 			[
-				AssetListView.ToSharedRef()
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				.FillWidth(1.0f)
+				[
+					SAssignNew(HorizontalScrollBox, SScrollBox)
+						.Orientation(Orient_Horizontal)
+						.ScrollBarAlwaysVisible(false)
+						.ConsumeMouseWheel(EConsumeMouseWheel::Never)
+					+ SScrollBox::Slot()
+					[
+						SNew(SBox)
+							.WidthOverride(TAttribute<FOptionalSize>::CreateSP(
+								this, &SDataAssetSheetEditor::GetTableContentWidth))
+							[
+								AssetListView.ToSharedRef()
+							]
+					]
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				[
+					VScrollBar
+				]
 			]
 
 			// ローディングオーバーレイ / Loading overlay
@@ -784,6 +815,10 @@ void SDataAssetSheetEditor::Construct(const FArguments& InArgs)
 	DropTarget->OnDragOverDelegate.BindSP(this, &SDataAssetSheetEditor::HandleDragOver);
 	DropTarget->OnDropDelegate.BindSP(this, &SDataAssetSheetEditor::HandleDrop);
 	TableWidget = DropTarget;
+
+	// Shift+マウスホイールで水平スクロールするため、ListViewへScrollBoxを紐付け
+	// Wire ListView → horizontal SScrollBox so Shift+Wheel can scroll horizontally
+	AssetListView->SetHorizontalScrollBox(HorizontalScrollBox);
 
 	// 詳細パネルウィジェット / Details panel widget
 	DetailsWidget = DetailsView;
@@ -917,6 +952,25 @@ void SDataAssetSheetEditor::RebuildHeaderRow()
 		ApplyColumnWidth(ColArgs, ColName);
 		HeaderRow->AddColumn(ColArgs);
 	}
+}
+
+FOptionalSize SDataAssetSheetEditor::GetTableContentWidth() const
+{
+	// 表示中列の幅合計 / Sum of visible column widths
+	float Total = 0.0f;
+	if (HeaderRow.IsValid())
+	{
+		for (const SHeaderRow::FColumn& Col : HeaderRow->GetColumns())
+		{
+			if (HiddenColumns.Contains(Col.ColumnId))
+			{
+				continue;
+			}
+			const float* W = ColumnWidths.Find(Col.ColumnId);
+			Total += (W ? *W : DefaultColumnWidth);
+		}
+	}
+	return FOptionalSize(Total);
 }
 
 void SDataAssetSheetEditor::ApplyColumnWidth(SHeaderRow::FColumn::FArguments& OutArgs, FName ColumnId) const
