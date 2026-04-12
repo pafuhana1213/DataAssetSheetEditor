@@ -9,6 +9,10 @@
 #include "ICollectionContainer.h"
 #include "UObject/UnrealType.h"
 
+DECLARE_CYCLE_STAT(TEXT("ApplyFilter"), STAT_DataAssetSheet_ApplyFilter, STATGROUP_DataAssetSheet);
+DECLARE_CYCLE_STAT(TEXT("SortByColumn"), STAT_DataAssetSheet_SortByColumn, STATGROUP_DataAssetSheet);
+DECLARE_CYCLE_STAT(TEXT("GetPropertyValueText"), STAT_DataAssetSheet_GetPropertyValueText, STATGROUP_DataAssetSheet);
+
 FDataAssetSheetModel::FDataAssetSheetModel()
 {
 }
@@ -238,6 +242,8 @@ bool FDataAssetSheetModel::ClassHasProperty(UClass* InClass, FProperty* InProper
 
 FString FDataAssetSheetModel::GetPropertyValueText(UDataAsset* InAsset, FProperty* InProperty) const
 {
+	SCOPE_CYCLE_COUNTER(STAT_DataAssetSheet_GetPropertyValueText);
+
 	if (!InAsset || !InProperty)
 	{
 		return FString();
@@ -322,6 +328,8 @@ void FDataAssetSheetModel::ApplyFilter(const FString& InFilterText)
 
 void FDataAssetSheetModel::SortByColumn(const FName& ColumnId, EColumnSortMode::Type InSortMode)
 {
+	SCOPE_CYCLE_COUNTER(STAT_DataAssetSheet_SortByColumn);
+
 	SortColumnId = ColumnId;
 	SortMode = InSortMode;
 

@@ -42,6 +42,9 @@
 #include "Widgets/Colors/SColorBlock.h"
 #include "GameplayTagContainer.h"
 
+DECLARE_CYCLE_STAT(TEXT("ImportCSV"), STAT_DataAssetSheet_ImportCSV, STATGROUP_DataAssetSheet);
+DECLARE_CYCLE_STAT(TEXT("ExportCSV"), STAT_DataAssetSheet_ExportCSV, STATGROUP_DataAssetSheet);
+
 #define LOCTEXT_NAMESPACE "SDataAssetSheetEditor"
 
 // Object/Texture セル用ウィジェット / Asset thumbnail cell with in-place swap detection.
@@ -1019,6 +1022,8 @@ static FString EscapeCSVField(const FString& InField)
 
 FReply SDataAssetSheetEditor::OnExportCSVClicked()
 {
+	SCOPE_CYCLE_COUNTER(STAT_DataAssetSheet_ExportCSV);
+
 	if (Model->GetLoadingState() != EDataAssetSheetLoadingState::Loaded)
 	{
 		return FReply::Handled();
@@ -1157,6 +1162,8 @@ static TArray<TArray<FString>> ParseCSVRecords(const FString& InCSVContent)
 
 FReply SDataAssetSheetEditor::OnImportCSVClicked()
 {
+	SCOPE_CYCLE_COUNTER(STAT_DataAssetSheet_ImportCSV);
+
 	if (Model->GetLoadingState() != EDataAssetSheetLoadingState::Loaded)
 	{
 		return FReply::Handled();
