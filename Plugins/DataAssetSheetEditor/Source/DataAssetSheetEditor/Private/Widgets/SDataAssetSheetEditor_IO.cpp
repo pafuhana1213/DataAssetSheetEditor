@@ -440,6 +440,7 @@ void SDataAssetSheetEditor::PasteOnSelectedRows()
 	FPlatformApplicationMisc::ClipboardPaste(ClipboardContent);
 	if (ClipboardContent.IsEmpty())
 	{
+		DataAssetSheetEditorNotify::ShowFailure(LOCTEXT("PasteEmptyClipboard", "Paste failed: clipboard is empty"));
 		return;
 	}
 
@@ -448,6 +449,7 @@ void SDataAssetSheetEditor::PasteOnSelectedRows()
 	ClipboardContent.ParseIntoArray(Lines, TEXT("\n"), false);
 	if (Lines.Num() < 2)
 	{
+		DataAssetSheetEditorNotify::ShowFailure(LOCTEXT("PasteNoRows", "Paste failed: clipboard has no data rows"));
 		return;
 	}
 
@@ -457,6 +459,7 @@ void SDataAssetSheetEditor::PasteOnSelectedRows()
 	if (Headers.Num() < 2 || Headers[0] != TEXT("AssetName"))
 	{
 		UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("Invalid clipboard data: header must start with 'AssetName'"));
+		DataAssetSheetEditorNotify::ShowFailure(LOCTEXT("PasteBadHeader", "Paste failed: invalid clipboard header"));
 		return;
 	}
 
@@ -569,11 +572,18 @@ void SDataAssetSheetEditor::PasteOnSelectedRows()
 
 	if (SuccessCount > 0)
 	{
-		// テーブル更新 / Refresh table
+		// テーブル更新（フィルタ保持）/ Refresh table (preserve filter)
+		Model->ReapplyFilter();
 		AssetListView->RequestListRefresh();
 	}
 
 	UE_LOG(LogDataAssetSheetEditor, Log, TEXT("Pasted data to %d asset(s)"), SuccessCount);
+
+	// 結果を通知 / Notify result
+	const FText ResultText = FText::Format(
+		LOCTEXT("PasteResult", "Paste: {0} succeeded"),
+		FText::AsNumber(SuccessCount));
+	DataAssetSheetEditorNotify::ShowResult(ResultText, SuccessCount > 0);
 }
 
 
