@@ -101,6 +101,10 @@ public:
 	FName GetSortColumnId() const { return SortColumnId; }
 	EColumnSortMode::Type GetSortMode() const { return SortMode; }
 
+	// インライン編集コミット時に発火するデリゲート（詳細パネル同期用）
+	// Delegate broadcast after an inline cell edit is committed (for syncing the details panel)
+	FSimpleMulticastDelegate OnInlineEditCommitted;
+
 	// 現在のフィルタテキストで再フィルタ（ソートも再適用）/ Re-apply current filter and sort
 	void ReapplyFilter() { ApplyFilter(FilterText); }
 

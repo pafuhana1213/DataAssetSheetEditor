@@ -8,14 +8,19 @@
 #include "Editor.h"
 #include "GameplayTagContainer.h"
 #include "Math/ColorList.h"
+#include "ScopedTransaction.h"
+#include "Styling/AppStyle.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "UObject/Package.h"
 #include "UObject/UnrealType.h"
 #include "Widgets/Colors/SColorBlock.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Input/SComboBox.h"
+#include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SHyperlink.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SWidgetSwitcher.h"
 #include "Widgets/Text/STextBlock.h"
 
 #define LOCTEXT_NAMESPACE "SDataAssetSheetEditor"
@@ -138,9 +143,10 @@ TSharedRef<SWidget> SDataAssetSheetRow::GenerateCellContent(const FName& ColumnI
 					];
 			}
 
-			// Bool値はチェックボックスで表示（読み取り専用）/ Display bool as read-only checkbox
+			// Bool値はチェックボックスで表示（クリックでトグル編集可）/ Editable bool checkbox — click to toggle
 			if (CastField<FBoolProperty>(Prop))
 			{
+				SDataAssetSheetRow* Self = this;
 				return SNew(SBox)
 					.Padding(FMargin(4.0f, 2.0f))
 					[
@@ -160,7 +166,26 @@ TSharedRef<SWidget> SDataAssetSheetRow::GenerateCellContent(const FName& ColumnI
 								}
 								return ECheckBoxState::Unchecked;
 							})
-							.IsEnabled(false)
+							.OnCheckStateChanged_Lambda([Self, WeakRowData, WeakModel, CapturedProp](ECheckBoxState NewState)
+							{
+								TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
+								TSharedPtr<FDataAssetSheetModel> PinnedModel = WeakModel.Pin();
+								if (!PinnedRow.IsValid() || !PinnedModel.IsValid() || !PinnedRow->IsLoaded()
+									|| !PinnedModel->AssetHasProperty(PinnedRow->Asset.Get(), CapturedProp))
+								{
+									return;
+								}
+								UDataAsset* Asset = PinnedRow->Asset.Get();
+								FScopedTransaction Transaction(
+									FText::Format(LOCTEXT("InlineEditBool", "Edit {0}"), FText::FromString(CapturedProp->GetName())));
+								Asset->Modify();
+								const FBoolProperty* BoolProp = CastField<FBoolProperty>(CapturedProp);
+								void* ValuePtr = BoolProp->ContainerPtrToValuePtr<void>(Asset);
+								BoolProp->SetPropertyValue(ValuePtr, NewState == ECheckBoxState::Checked);
+								Asset->MarkPackageDirty();
+								PinnedModel->RebuildRowCacheForProperty(PinnedRow, CapturedProp);
+								PinnedModel->OnInlineEditCommitted.Broadcast();
+							})
 					];
 			}
 
@@ -276,7 +301,7 @@ TSharedRef<SWidget> SDataAssetSheetRow::GenerateCellContent(const FName& ColumnI
 					.ThumbnailPool(ThumbnailPool);
 			}
 
-			// Enum: セル表示のみ DisplayName に整形 / Enum cell shows DisplayName (CSV path unchanged)
+			// Enum: 表示 + ダブルクリックでコンボボックス編集 / Enum cell with inline combo box editing
 			{
 				UEnum* EnumPtr = nullptr;
 				if (const FEnumProperty* EnumProp = CastField<FEnumProperty>(Prop))
@@ -291,9 +316,77 @@ TSharedRef<SWidget> SDataAssetSheetRow::GenerateCellContent(const FName& ColumnI
 				if (EnumPtr)
 				{
 					UEnum* CapturedEnum = EnumPtr;
-					return SNew(SBox)
-						.Padding(FMargin(4.0f, 2.0f))
-						.VAlign(VAlign_Center)
+
+					// コンボボックス用のオプションリストを構築 / Build options list for combo box
+					TSharedPtr<TArray<TSharedPtr<FString>>> EnumOptions = MakeShared<TArray<TSharedPtr<FString>>>();
+					const int32 NumEnums = CapturedEnum->NumEnums() - 1; // exclude _MAX
+					for (int32 i = 0; i < NumEnums; ++i)
+					{
+						EnumOptions->Add(MakeShared<FString>(CapturedEnum->GetDisplayNameTextByValue(i).ToString()));
+					}
+
+					// 読み取り専用テキスト / Read-only display text
+					TSharedRef<STextBlock> DisplayText = SNew(STextBlock)
+						.Text_Lambda([WeakRowData, WeakModel, CapturedProp, CapturedEnum]() -> FText
+						{
+							TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
+							TSharedPtr<FDataAssetSheetModel> PinnedModel = WeakModel.Pin();
+							if (!PinnedRow.IsValid() || !PinnedModel.IsValid() || !PinnedRow->IsLoaded()
+								|| !PinnedModel->AssetHasProperty(PinnedRow->Asset.Get(), CapturedProp))
+							{
+								return FText::GetEmpty();
+							}
+
+							int64 IntValue = 0;
+							if (const FEnumProperty* Ep = CastField<FEnumProperty>(CapturedProp))
+							{
+								const void* ValuePtr = Ep->ContainerPtrToValuePtr<void>(PinnedRow->Asset.Get());
+								IntValue = Ep->GetUnderlyingProperty()->GetSignedIntPropertyValue(ValuePtr);
+							}
+							else if (const FByteProperty* Bp = CastField<FByteProperty>(CapturedProp))
+							{
+								const void* ValuePtr = Bp->ContainerPtrToValuePtr<void>(PinnedRow->Asset.Get());
+								IntValue = static_cast<int64>(Bp->GetPropertyValue(ValuePtr));
+							}
+							return CapturedEnum->GetDisplayNameTextByValue(IntValue);
+						})
+						.ColorAndOpacity(this, &SDataAssetSheetRow::GetRowTextColor);
+
+					// コンボボックス / Editable combo box
+					SDataAssetSheetRow* Self = this;
+					FName CapturedColumnId = ColumnId;
+					TSharedRef<SComboBox<TSharedPtr<FString>>> ComboBox = SNew(SComboBox<TSharedPtr<FString>>)
+						.OptionsSource(EnumOptions.Get())
+						.OnGenerateWidget_Lambda([](TSharedPtr<FString> InOption) -> TSharedRef<SWidget>
+						{
+							return SNew(STextBlock).Text(FText::FromString(*InOption));
+						})
+						.OnSelectionChanged_Lambda([Self, WeakRowData, WeakModel, CapturedProp, CapturedEnum, CapturedColumnId, EnumOptions](TSharedPtr<FString> InSelection, ESelectInfo::Type SelectInfo)
+						{
+							if (SelectInfo == ESelectInfo::Direct || !InSelection.IsValid())
+							{
+								return;
+							}
+							// 選択されたインデックスを特定 / Find selected index
+							int32 SelectedIndex = INDEX_NONE;
+							for (int32 i = 0; i < EnumOptions->Num(); ++i)
+							{
+								if (*(*EnumOptions)[i] == *InSelection)
+								{
+									SelectedIndex = i;
+									break;
+								}
+							}
+							if (SelectedIndex == INDEX_NONE)
+							{
+								return;
+							}
+							// Enum値をExportText形式でコミット / Commit using ExportText-compatible format
+							int64 EnumValue = CapturedEnum->GetValueByIndex(SelectedIndex);
+							FString ValueStr = CapturedEnum->GetNameStringByValue(EnumValue);
+							Self->CommitPropertyEdit(CapturedProp, ValueStr);
+							Self->ExitEditMode();
+						})
 						[
 							SNew(STextBlock)
 								.Text_Lambda([WeakRowData, WeakModel, CapturedProp, CapturedEnum]() -> FText
@@ -305,7 +398,6 @@ TSharedRef<SWidget> SDataAssetSheetRow::GenerateCellContent(const FName& ColumnI
 									{
 										return FText::GetEmpty();
 									}
-
 									int64 IntValue = 0;
 									if (const FEnumProperty* Ep = CastField<FEnumProperty>(CapturedProp))
 									{
@@ -319,12 +411,130 @@ TSharedRef<SWidget> SDataAssetSheetRow::GenerateCellContent(const FName& ColumnI
 									}
 									return CapturedEnum->GetDisplayNameTextByValue(IntValue);
 								})
-								.ColorAndOpacity(this, &SDataAssetSheetRow::GetRowTextColor)
+						];
+
+					// SWidgetSwitcher: slot 0 = 読み取り, slot 1 = コンボボックス
+					TSharedPtr<SWidgetSwitcher> Switcher;
+					TSharedRef<SWidget> Result = SNew(SBox)
+						.Padding(FMargin(4.0f, 2.0f))
+						.VAlign(VAlign_Center)
+						[
+							SAssignNew(Switcher, SWidgetSwitcher)
+								.WidgetIndex(0)
+								+ SWidgetSwitcher::Slot()
+								[
+									DisplayText
+								]
+								+ SWidgetSwitcher::Slot()
+								[
+									ComboBox
+								]
+						];
+
+					CellSwitchers.Add(ColumnId, Switcher);
+
+					// ダブルクリックで編集開始 / Double-click to enter edit mode
+					return SNew(SBorder)
+						.BorderImage(FAppStyle::GetBrush("NoBorder"))
+						.Padding(FMargin(0.0f))
+						.OnMouseDoubleClick_Lambda([Self, CapturedColumnId](const FGeometry&, const FPointerEvent&) -> FReply
+						{
+							Self->EnterEditMode(CapturedColumnId);
+							return FReply::Handled();
+						})
+						[
+							Result
 						];
 				}
 			}
 
-			// その他のプロパティはTAttributeでリアルタイム更新 / Other properties with TAttribute for real-time updates
+			// インライン編集可能な型かチェック / Check if this property type supports inline text editing
+			const bool bIsInlineEditable =
+				CastField<FStrProperty>(Prop) ||
+				CastField<FTextProperty>(Prop) ||
+				CastField<FNameProperty>(Prop) ||
+				CastField<FIntProperty>(Prop) ||
+				CastField<FInt64Property>(Prop) ||
+				CastField<FFloatProperty>(Prop) ||
+				CastField<FDoubleProperty>(Prop);
+
+			if (bIsInlineEditable)
+			{
+				// 読み取り専用テキスト / Read-only display
+				TSharedRef<STextBlock> DisplayText = SNew(STextBlock)
+					.Text_Lambda([WeakRowData, WeakModel, CapturedProp]() -> FText
+					{
+						TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
+						TSharedPtr<FDataAssetSheetModel> PinnedModel = WeakModel.Pin();
+						if (PinnedRow.IsValid() && PinnedModel.IsValid() && PinnedRow->IsLoaded())
+						{
+							return FText::FromString(
+								PinnedModel->GetPropertyValueText(PinnedRow->Asset.Get(), CapturedProp));
+						}
+						return FText::GetEmpty();
+					})
+					.ColorAndOpacity(this, &SDataAssetSheetRow::GetRowTextColor);
+
+				// 編集用テキストボックス / Editable text box
+				SDataAssetSheetRow* Self = this;
+				FName CapturedColumnId = ColumnId;
+				TSharedRef<SEditableTextBox> EditBox = SNew(SEditableTextBox)
+					.Text_Lambda([WeakRowData, WeakModel, CapturedProp]() -> FText
+					{
+						TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
+						TSharedPtr<FDataAssetSheetModel> PinnedModel = WeakModel.Pin();
+						if (PinnedRow.IsValid() && PinnedModel.IsValid() && PinnedRow->IsLoaded())
+						{
+							return FText::FromString(
+								PinnedModel->GetPropertyValueText(PinnedRow->Asset.Get(), CapturedProp));
+						}
+						return FText::GetEmpty();
+					})
+					.SelectAllTextWhenFocused(true)
+					.RevertTextOnEscape(true)
+					.OnTextCommitted_Lambda([Self, CapturedProp, CapturedColumnId](const FText& NewText, ETextCommit::Type CommitType)
+					{
+						if (CommitType == ETextCommit::OnEnter)
+						{
+							Self->CommitPropertyEdit(CapturedProp, NewText.ToString());
+						}
+						Self->ExitEditMode();
+					});
+
+				// SWidgetSwitcher: slot 0 = 読み取り, slot 1 = テキストボックス
+				TSharedPtr<SWidgetSwitcher> Switcher;
+				TSharedRef<SWidget> Result = SNew(SBox)
+					.Padding(FMargin(4.0f, 2.0f))
+					[
+						SAssignNew(Switcher, SWidgetSwitcher)
+							.WidgetIndex(0)
+							+ SWidgetSwitcher::Slot()
+							[
+								DisplayText
+							]
+							+ SWidgetSwitcher::Slot()
+							[
+								EditBox
+							]
+					];
+
+				CellSwitchers.Add(ColumnId, Switcher);
+
+				// ダブルクリックで編集開始 / Double-click to enter edit mode
+				return SNew(SBorder)
+					.BorderImage(FAppStyle::GetBrush("NoBorder"))
+					.Padding(FMargin(0.0f))
+					.OnMouseDoubleClick_Lambda([Self, CapturedColumnId](const FGeometry&, const FPointerEvent&) -> FReply
+					{
+						Self->EnterEditMode(CapturedColumnId);
+						return FReply::Handled();
+					})
+					[
+						Result
+					];
+			}
+
+			// その他のプロパティはTAttributeでリアルタイム更新（編集不可）/ Non-editable properties with TAttribute
 			return SNew(SBox)
 				.Padding(FMargin(4.0f, 2.0f))
 				[
@@ -360,6 +570,85 @@ void SDataAssetSheetRow::OnAssetNameClicked()
 			AssetEditorSubsystem->OpenEditorForAsset(RowData->Asset.Get());
 		}
 	}
+}
+
+void SDataAssetSheetRow::CommitPropertyEdit(FProperty* Prop, const FString& NewValue)
+{
+	if (!RowData.IsValid() || !RowData->IsLoaded() || !Model.IsValid())
+	{
+		return;
+	}
+
+	UDataAsset* Asset = RowData->Asset.Get();
+	if (!Asset || !Model->AssetHasProperty(Asset, Prop))
+	{
+		return;
+	}
+
+	FScopedTransaction Transaction(
+		FText::Format(LOCTEXT("InlineEdit", "Edit {0}"), FText::FromString(Prop->GetName())));
+	Asset->Modify();
+
+	void* ValuePtr = Prop->ContainerPtrToValuePtr<void>(Asset);
+	if (FTextProperty* TextProp = CastField<FTextProperty>(Prop))
+	{
+		TextProp->SetPropertyValue(ValuePtr, FText::FromString(NewValue));
+	}
+	else
+	{
+		Prop->ImportText_Direct(*NewValue, ValuePtr, Asset, PPF_None);
+	}
+
+	Asset->MarkPackageDirty();
+	Model->RebuildRowCacheForProperty(RowData, Prop);
+	Model->OnInlineEditCommitted.Broadcast();
+}
+
+void SDataAssetSheetRow::EnterEditMode(FName ColumnId)
+{
+	// 未ロードアセットは編集不可 / Cannot edit unloaded assets
+	if (!RowData.IsValid() || !RowData->IsLoaded())
+	{
+		return;
+	}
+
+	// 既に他のカラムを編集中なら終了 / Exit current edit if another column is being edited
+	if (EditingColumnId != NAME_None)
+	{
+		ExitEditMode();
+	}
+
+	TSharedPtr<SWidgetSwitcher>* FoundSwitcher = CellSwitchers.Find(ColumnId);
+	if (!FoundSwitcher || !FoundSwitcher->IsValid())
+	{
+		return;
+	}
+
+	EditingColumnId = ColumnId;
+	(*FoundSwitcher)->SetActiveWidgetIndex(1);
+
+	// 編集ウィジェットにフォーカス / Focus the edit widget
+	TSharedPtr<SWidget> EditWidget = (*FoundSwitcher)->GetWidget(1);
+	if (EditWidget.IsValid())
+	{
+		FSlateApplication::Get().SetKeyboardFocus(EditWidget.ToSharedRef(), EFocusCause::SetDirectly);
+	}
+}
+
+void SDataAssetSheetRow::ExitEditMode()
+{
+	if (EditingColumnId == NAME_None)
+	{
+		return;
+	}
+
+	TSharedPtr<SWidgetSwitcher>* FoundSwitcher = CellSwitchers.Find(EditingColumnId);
+	if (FoundSwitcher && FoundSwitcher->IsValid())
+	{
+		(*FoundSwitcher)->SetActiveWidgetIndex(0);
+	}
+
+	EditingColumnId = NAME_None;
 }
 
 #undef LOCTEXT_NAMESPACE
