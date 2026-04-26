@@ -89,10 +89,13 @@ TSharedRef<SWidget> SDataAssetSheetRow::GenerateCellContent(const FName& ColumnI
 						FString DisplayName = PinnedRow->AssetName;
 						if (PinnedRow->IsLoaded())
 						{
-							UPackage* Package = PinnedRow->Asset->GetOutermost();
-							if (Package && Package->IsDirty())
+							if (UDataAsset* Asset = PinnedRow->Asset.Get())
 							{
-								DisplayName = TEXT("* ") + DisplayName;
+								UPackage* Package = Asset->GetOutermost();
+								if (Package && Package->IsDirty())
+								{
+									DisplayName = TEXT("* ") + DisplayName;
+								}
 							}
 						}
 						return FText::FromString(DisplayName);
@@ -595,13 +598,18 @@ TSharedRef<SWidget> SDataAssetSheetRow::GenerateCellContent(const FName& ColumnI
 // アセット名クリック → アセットエディタを開く / Open asset editor on click
 void SDataAssetSheetRow::OnAssetNameClicked()
 {
-	if (RowData->IsLoaded())
+	if (!RowData.IsValid() || !RowData->IsLoaded())
 	{
-		UAssetEditorSubsystem* AssetEditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>();
-		if (AssetEditorSubsystem)
-		{
-			AssetEditorSubsystem->OpenEditorForAsset(RowData->Asset.Get());
-		}
+		return;
+	}
+	UDataAsset* Asset = RowData->Asset.Get();
+	if (!Asset)
+	{
+		return;
+	}
+	if (UAssetEditorSubsystem* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>() : nullptr)
+	{
+		Subsystem->OpenEditorForAsset(Asset);
 	}
 }
 

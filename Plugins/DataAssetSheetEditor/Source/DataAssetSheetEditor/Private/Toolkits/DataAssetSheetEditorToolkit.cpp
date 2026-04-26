@@ -166,7 +166,10 @@ void FDataAssetSheetEditorToolkit::OnTargetClassHyperlinkClicked()
 	// Blueprintクラスの場合はBPエディタを開く / Open Blueprint editor for BP classes
 	if (UBlueprint* BP = Cast<UBlueprint>(TargetClass->ClassGeneratedBy))
 	{
-		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(BP);
+		if (UAssetEditorSubsystem* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>() : nullptr)
+		{
+			Subsystem->OpenEditorForAsset(BP);
+		}
 	}
 	// C++クラスの場合はソースコードに遷移 / Navigate to source code for C++ classes
 	else if (FSourceCodeNavigation::CanNavigateToClass(TargetClass))
@@ -188,7 +191,10 @@ void FDataAssetSheetEditorToolkit::OnDisplayClassHyperlinkClicked()
 	// Blueprintクラスの場合はBPエディタを開く / Open Blueprint editor for BP classes
 	if (UBlueprint* BP = Cast<UBlueprint>(DisplayClass->ClassGeneratedBy))
 	{
-		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(BP);
+		if (UAssetEditorSubsystem* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>() : nullptr)
+		{
+			Subsystem->OpenEditorForAsset(BP);
+		}
 	}
 	// C++クラスの場合はソースコードに遷移 / Navigate to source code for C++ classes
 	else if (FSourceCodeNavigation::CanNavigateToClass(DisplayClass))
