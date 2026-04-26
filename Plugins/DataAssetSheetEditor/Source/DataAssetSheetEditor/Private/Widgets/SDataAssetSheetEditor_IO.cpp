@@ -300,6 +300,12 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 		}
 
 		UDataAsset* Asset = FoundRow->Asset.Get();
+		if (!Asset)
+		{
+			UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("CSV import: row '%s' has invalid asset reference"), *Fields[0]);
+			++FailCount;
+			continue;
+		}
 		Asset->Modify();
 
 		// 各プロパティの値をインポート / Import each property value
@@ -312,6 +318,12 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 			}
 
 			FProperty* Prop = ImportProperties[PropIndex];
+			// アセットがこのプロパティを所有しない場合はスキップ（基底行 × 派生カラム対策）
+			// Skip if asset doesn't own this property (base-class row × derived-class column)
+			if (!Model->AssetHasProperty(Asset, Prop))
+			{
+				continue;
+			}
 			void* ValuePtr = Prop->ContainerPtrToValuePtr<void>(Asset);
 			const FString& ValueStr = Fields[FieldIndex];
 
@@ -515,6 +527,10 @@ void SDataAssetSheetEditor::PasteOnSelectedRows()
 		}
 
 		UDataAsset* Asset = TargetRow->Asset.Get();
+		if (!Asset)
+		{
+			continue;
+		}
 		Asset->Modify();
 
 		for (int32 PropIndex = 0; PropIndex < PasteProperties.Num(); ++PropIndex)
@@ -526,6 +542,10 @@ void SDataAssetSheetEditor::PasteOnSelectedRows()
 			}
 
 			FProperty* Prop = PasteProperties[PropIndex];
+			if (!Model->AssetHasProperty(Asset, Prop))
+			{
+				continue;
+			}
 			void* ValuePtr = Prop->ContainerPtrToValuePtr<void>(Asset);
 			FString ValueStr = Fields[FieldIndex];
 
