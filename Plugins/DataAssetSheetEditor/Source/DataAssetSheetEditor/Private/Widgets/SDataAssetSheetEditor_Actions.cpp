@@ -111,7 +111,12 @@ TSharedPtr<SWidget> SDataAssetSheetEditor::OnConstructContextMenu()
 					{
 						if (Item.IsValid() && Item->IsLoaded())
 						{
-							UPackage* Package = Item->Asset->GetOutermost();
+							UDataAsset* Asset = Item->Asset.Get();
+							if (!Asset)
+							{
+								continue;
+							}
+							UPackage* Package = Asset->GetOutermost();
 							if (Package && Package->IsDirty())
 							{
 								PackagesToSave.Add(Package);
@@ -332,7 +337,12 @@ void SDataAssetSheetEditor::SaveAllModifiedAssets()
 	{
 		if (RowData.IsValid() && RowData->IsLoaded())
 		{
-			UPackage* Package = RowData->Asset->GetOutermost();
+			UDataAsset* Asset = RowData->Asset.Get();
+			if (!Asset)
+			{
+				continue;
+			}
+			UPackage* Package = Asset->GetOutermost();
 			if (Package && Package->IsDirty())
 			{
 				DirtyPackages.Add(Package);
@@ -353,7 +363,12 @@ bool SDataAssetSheetEditor::HasModifiedAssets() const
 	{
 		if (RowData.IsValid() && RowData->IsLoaded())
 		{
-			UPackage* Package = RowData->Asset->GetOutermost();
+			UDataAsset* Asset = RowData->Asset.Get();
+			if (!Asset)
+			{
+				continue;
+			}
+			UPackage* Package = Asset->GetOutermost();
 			if (Package && Package->IsDirty())
 			{
 				return true;
@@ -377,7 +392,12 @@ void SDataAssetSheetEditor::FindReferencesForSelectedAsset()
 	{
 		if (Item.IsValid() && Item->IsLoaded())
 		{
-			FName PackageName = Item->Asset->GetOutermost()->GetFName();
+			UDataAsset* Asset = Item->Asset.Get();
+			if (!Asset)
+			{
+				continue;
+			}
+			FName PackageName = Asset->GetOutermost()->GetFName();
 			AssetIdentifiers.Add(FAssetIdentifier(PackageName));
 		}
 	}
