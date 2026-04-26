@@ -5,7 +5,7 @@
 #include "SObjectThumbnailCell.h"
 #include "SDataAssetSheetRow.h"
 #include "SDropTargetOverlay.h"
-#include "DataAssetSheetCSVUtils.h"
+#include "Utils/DataAssetSheetCSVUtils.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SScrollBar.h"
 #include "DataAssetSheet.h"
@@ -70,6 +70,19 @@ void SDataAssetSheetEditor::Construct(const FArguments& InArgs)
 
 	// プロパティ変更時にテーブルを更新 / Refresh table when properties change in details panel
 	DetailsView->OnFinishedChangingProperties().AddSP(this, &SDataAssetSheetEditor::OnDetailsPropertyChanged);
+
+	// インライン編集コミット時に詳細パネルとテーブルを更新 / Sync details panel and table after inline cell edit
+	Model->OnInlineEditCommitted.AddLambda([this]()
+	{
+		if (DetailsView.IsValid())
+		{
+			DetailsView->ForceRefresh();
+		}
+		if (AssetListView.IsValid())
+		{
+			AssetListView->RequestListRefresh();
+		}
+	});
 
 	// HeaderRow初期化 / Initialize header row
 	HeaderRow = SNew(SHeaderRow);

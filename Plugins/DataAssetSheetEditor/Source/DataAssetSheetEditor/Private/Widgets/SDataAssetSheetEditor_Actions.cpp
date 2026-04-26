@@ -5,7 +5,7 @@
 #include "SObjectThumbnailCell.h"
 #include "SDataAssetSheetRow.h"
 #include "SDropTargetOverlay.h"
-#include "DataAssetSheetCSVUtils.h"
+#include "Utils/DataAssetSheetCSVUtils.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SScrollBar.h"
 #include "DataAssetSheet.h"

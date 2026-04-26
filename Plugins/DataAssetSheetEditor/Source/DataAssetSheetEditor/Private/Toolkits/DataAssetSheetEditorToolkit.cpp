@@ -2,7 +2,7 @@
 
 #include "DataAssetSheetEditorToolkit.h"
 #include "SDataAssetSheetEditor.h"
-#include "SDataAssetSheetSettingsTab.h"
+#include "Widgets/SDataAssetSheetSettingsTab.h"
 #include "DataAssetSheet.h"
 #include "Widgets/Docking/SDockTab.h"
 #include "Widgets/Input/SHyperlink.h"

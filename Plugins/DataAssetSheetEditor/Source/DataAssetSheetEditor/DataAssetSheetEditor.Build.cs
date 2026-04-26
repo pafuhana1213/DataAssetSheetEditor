@@ -8,6 +8,17 @@ public class DataAssetSheetEditor : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
+		// Public サブフォルダをインクルードパスに追加 / Add Public subdirectories to include paths
+		PublicIncludePaths.AddRange(
+			new string[]
+			{
+				System.IO.Path.Combine(ModuleDirectory, "Public", "Assets"),
+				System.IO.Path.Combine(ModuleDirectory, "Public", "Models"),
+				System.IO.Path.Combine(ModuleDirectory, "Public", "Toolkits"),
+				System.IO.Path.Combine(ModuleDirectory, "Public", "Widgets"),
+			}
+		);
+
 		PublicDependencyModuleNames.AddRange(
 			new string[]
 			{
