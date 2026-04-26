@@ -175,15 +175,48 @@ TSharedRef<SWidget> SDataAssetSheetRow::GenerateCellContent(const FName& ColumnI
 								{
 									return;
 								}
-								UDataAsset* Asset = PinnedRow->Asset.Get();
+
+								// 編集対象の行リストを決定 / Determine target rows
+								TArray<TSharedPtr<FDataAssetRowData>> TargetRows;
+								if (Self->OwnerListView.IsValid())
+								{
+									TArray<TSharedPtr<FDataAssetRowData>> SelectedItems = Self->OwnerListView->GetSelectedItems();
+									bool bThisRowSelected = SelectedItems.ContainsByPredicate(
+										[&PinnedRow](const TSharedPtr<FDataAssetRowData>& Item) { return Item == PinnedRow; });
+									if (bThisRowSelected && SelectedItems.Num() > 1)
+									{
+										TargetRows = MoveTemp(SelectedItems);
+									}
+								}
+								if (TargetRows.IsEmpty())
+								{
+									TargetRows.Add(PinnedRow);
+								}
+
+								const FBoolProperty* BoolProp = CastField<FBoolProperty>(CapturedProp);
+								const bool bNewValue = (NewState == ECheckBoxState::Checked);
+
 								FScopedTransaction Transaction(
 									FText::Format(LOCTEXT("InlineEditBool", "Edit {0}"), FText::FromString(CapturedProp->GetName())));
-								Asset->Modify();
-								const FBoolProperty* BoolProp = CastField<FBoolProperty>(CapturedProp);
-								void* ValuePtr = BoolProp->ContainerPtrToValuePtr<void>(Asset);
-								BoolProp->SetPropertyValue(ValuePtr, NewState == ECheckBoxState::Checked);
-								Asset->MarkPackageDirty();
-								PinnedModel->RebuildRowCacheForProperty(PinnedRow, CapturedProp);
+
+								for (const TSharedPtr<FDataAssetRowData>& TargetRow : TargetRows)
+								{
+									if (!TargetRow.IsValid() || !TargetRow->IsLoaded())
+									{
+										continue;
+									}
+									UDataAsset* TargetAsset = TargetRow->Asset.Get();
+									if (!TargetAsset || !PinnedModel->AssetHasProperty(TargetAsset, CapturedProp))
+									{
+										continue;
+									}
+									TargetAsset->Modify();
+									void* ValuePtr = BoolProp->ContainerPtrToValuePtr<void>(TargetAsset);
+									BoolProp->SetPropertyValue(ValuePtr, bNewValue);
+									TargetAsset->MarkPackageDirty();
+									PinnedModel->RebuildRowCacheForProperty(TargetRow, CapturedProp);
+								}
+
 								PinnedModel->OnInlineEditCommitted.Broadcast();
 							})
 					];
@@ -585,22 +618,53 @@ void SDataAssetSheetRow::CommitPropertyEdit(FProperty* Prop, const FString& NewV
 		return;
 	}
 
+	// 編集対象の行リストを決定：この行が選択に含まれていれば全選択行、そうでなければこの行のみ
+	// Determine target rows: all selected rows if this row is in the selection, otherwise just this row
+	TArray<TSharedPtr<FDataAssetRowData>> TargetRows;
+	if (OwnerListView.IsValid())
+	{
+		TArray<TSharedPtr<FDataAssetRowData>> SelectedItems = OwnerListView->GetSelectedItems();
+		bool bThisRowSelected = SelectedItems.ContainsByPredicate(
+			[this](const TSharedPtr<FDataAssetRowData>& Item) { return Item == RowData; });
+		if (bThisRowSelected && SelectedItems.Num() > 1)
+		{
+			TargetRows = MoveTemp(SelectedItems);
+		}
+	}
+	if (TargetRows.IsEmpty())
+	{
+		TargetRows.Add(RowData);
+	}
+
 	FScopedTransaction Transaction(
 		FText::Format(LOCTEXT("InlineEdit", "Edit {0}"), FText::FromString(Prop->GetName())));
-	Asset->Modify();
 
-	void* ValuePtr = Prop->ContainerPtrToValuePtr<void>(Asset);
-	if (FTextProperty* TextProp = CastField<FTextProperty>(Prop))
+	for (const TSharedPtr<FDataAssetRowData>& TargetRow : TargetRows)
 	{
-		TextProp->SetPropertyValue(ValuePtr, FText::FromString(NewValue));
-	}
-	else
-	{
-		Prop->ImportText_Direct(*NewValue, ValuePtr, Asset, PPF_None);
+		if (!TargetRow.IsValid() || !TargetRow->IsLoaded())
+		{
+			continue;
+		}
+		UDataAsset* TargetAsset = TargetRow->Asset.Get();
+		if (!TargetAsset || !Model->AssetHasProperty(TargetAsset, Prop))
+		{
+			continue;
+		}
+
+		TargetAsset->Modify();
+		void* ValuePtr = Prop->ContainerPtrToValuePtr<void>(TargetAsset);
+		if (FTextProperty* TextProp = CastField<FTextProperty>(Prop))
+		{
+			TextProp->SetPropertyValue(ValuePtr, FText::FromString(NewValue));
+		}
+		else
+		{
+			Prop->ImportText_Direct(*NewValue, ValuePtr, TargetAsset, PPF_None);
+		}
+		TargetAsset->MarkPackageDirty();
+		Model->RebuildRowCacheForProperty(TargetRow, Prop);
 	}
 
-	Asset->MarkPackageDirty();
-	Model->RebuildRowCacheForProperty(RowData, Prop);
 	Model->OnInlineEditCommitted.Broadcast();
 }
 

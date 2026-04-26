@@ -189,6 +189,28 @@ void SDataAssetSheetEditor::Construct(const FArguments& InArgs)
 					})
 					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
 			]
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			.Padding(8.0f, 0.0f, 0.0f, 0.0f)
+			[
+				SNew(STextBlock)
+					.Text_Lambda([this]() -> FText
+					{
+						if (!AssetListView.IsValid())
+						{
+							return FText::GetEmpty();
+						}
+						const int32 SelectedCount = AssetListView->GetNumItemsSelected();
+						if (SelectedCount > 1)
+						{
+							return FText::Format(
+								LOCTEXT("SelectedCount", "{0} selected"), SelectedCount);
+						}
+						return FText::GetEmpty();
+					})
+					.ColorAndOpacity(FLinearColor(0.2f, 0.6f, 1.0f))
+			]
 		]
 
 		// テーブル + ローディングオーバーレイ / Table with loading overlay
