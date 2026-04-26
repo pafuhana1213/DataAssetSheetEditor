@@ -391,7 +391,10 @@ void SDataAssetSheetEditor::CopySelectedRows()
 	const TArray<FProperty*>& ColumnProperties = Model->GetColumnProperties();
 	FString ClipboardContent;
 
-	// ヘッダー行 / Header row
+	// ヘッダー行: AssetPath を一意キーとして第1列に、AssetName は参考列として第2列に出力
+	// Header row: AssetPath as unique key (col 0), AssetName as human-readable label (col 1)
+	ClipboardContent += TEXT("AssetPath");
+	ClipboardContent += TEXT("\t");
 	ClipboardContent += TEXT("AssetName");
 	for (FProperty* Prop : ColumnProperties)
 	{
@@ -408,6 +411,8 @@ void SDataAssetSheetEditor::CopySelectedRows()
 			continue;
 		}
 
+		ClipboardContent += Item->AssetPath.ToString();
+		ClipboardContent += TEXT("\t");
 		ClipboardContent += Item->AssetName;
 
 		for (FProperty* Prop : ColumnProperties)
@@ -456,15 +461,28 @@ void SDataAssetSheetEditor::PasteOnSelectedRows()
 	// ヘッダー行からプロパティをマッピング / Map headers to properties
 	TArray<FString> Headers;
 	Lines[0].ParseIntoArray(Headers, TEXT("\t"), false);
-	if (Headers.Num() < 2 || Headers[0] != TEXT("AssetName"))
+
+	// 第1列で形式を判定（ImportCSV と同じパターン）/ Detect format from first column (same pattern as ImportCSV)
+	const bool bPathKeyed = (Headers.Num() >= 1) && (Headers[0] == TEXT("AssetPath"));
+	const bool bLegacyNameKeyed = (Headers.Num() >= 1) && (Headers[0] == TEXT("AssetName"));
+	if (!bPathKeyed && !bLegacyNameKeyed)
 	{
-		UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("Invalid clipboard data: header must start with 'AssetName'"));
+		UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("Invalid clipboard data: header must start with 'AssetPath' or 'AssetName'"));
 		DataAssetSheetEditorNotify::ShowFailure(LOCTEXT("PasteBadHeader", "Paste failed: invalid clipboard header"));
 		return;
 	}
 
+	// AssetPath 形式の場合は第2列の AssetName をスキップ / In path-keyed format, skip the AssetName label column
+	const int32 PropertyStartCol = bPathKeyed ? 2 : 1;
+	if (Headers.Num() < PropertyStartCol)
+	{
+		UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("Invalid clipboard data: missing AssetName column"));
+		DataAssetSheetEditorNotify::ShowFailure(LOCTEXT("PasteMissingName", "Paste failed: missing AssetName column"));
+		return;
+	}
+
 	TArray<FProperty*> PasteProperties;
-	for (int32 i = 1; i < Headers.Num(); ++i)
+	for (int32 i = PropertyStartCol; i < Headers.Num(); ++i)
 	{
 		FProperty* FoundProp = nullptr;
 		for (FProperty* Prop : Model->GetColumnProperties())
@@ -476,6 +494,26 @@ void SDataAssetSheetEditor::PasteOnSelectedRows()
 			}
 		}
 		PasteProperties.Add(FoundProp);
+	}
+
+	// 選択行から検索マップを構築 / Build lookup maps from selected items
+	TMap<FSoftObjectPath, TSharedPtr<FDataAssetRowData>> PathToSelected;
+	TMap<FString, TSharedPtr<FDataAssetRowData>> NameToSelected;
+	for (const TSharedPtr<FDataAssetRowData>& Item : SelectedItems)
+	{
+		if (!Item.IsValid())
+		{
+			continue;
+		}
+		PathToSelected.Add(Item->AssetPath, Item);
+		if (bLegacyNameKeyed && NameToSelected.Contains(Item->AssetName))
+		{
+			UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("Duplicate asset name '%s' in selection while pasting legacy clipboard; first match wins"), *Item->AssetName);
+		}
+		else
+		{
+			NameToSelected.Add(Item->AssetName, Item);
+		}
 	}
 
 	// Undo対応 / Undo support
@@ -500,20 +538,24 @@ void SDataAssetSheetEditor::PasteOnSelectedRows()
 			continue;
 		}
 
-		FString AssetName = Fields[0];
-
-		// アセット名で選択行を検索 / Find matching selected asset
+		// キーで選択行を検索 / Find matching selected row by key
 		TSharedPtr<FDataAssetRowData> TargetRow;
-		for (const TSharedPtr<FDataAssetRowData>& Item : SelectedItems)
+		if (bPathKeyed)
 		{
-			if (Item.IsValid() && Item->IsLoaded() && Item->AssetName == AssetName)
+			if (TSharedPtr<FDataAssetRowData>* Ptr = PathToSelected.Find(FSoftObjectPath(Fields[0])))
 			{
-				TargetRow = Item;
-				break;
+				TargetRow = *Ptr;
+			}
+		}
+		else
+		{
+			if (TSharedPtr<FDataAssetRowData>* Ptr = NameToSelected.Find(Fields[0]))
+			{
+				TargetRow = *Ptr;
 			}
 		}
 
-		// 選択行にマッチしない場合、選択行の順番で適用 / If no name match, apply by selection order
+		// 選択行にマッチしない場合、選択行の順番で適用 / If no key match, apply by selection order
 		if (!TargetRow.IsValid())
 		{
 			int32 SelectionIndex = LineIndex - 1;
@@ -537,7 +579,7 @@ void SDataAssetSheetEditor::PasteOnSelectedRows()
 
 		for (int32 PropIndex = 0; PropIndex < PasteProperties.Num(); ++PropIndex)
 		{
-			int32 FieldIndex = PropIndex + 1;
+			int32 FieldIndex = PropIndex + PropertyStartCol;
 			if (FieldIndex >= Fields.Num() || !PasteProperties[PropIndex])
 			{
 				continue;
