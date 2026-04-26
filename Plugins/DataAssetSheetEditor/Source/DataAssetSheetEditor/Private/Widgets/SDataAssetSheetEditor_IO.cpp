@@ -219,6 +219,7 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 
 	// ヘッダーからプロパティをマッピング / Map headers to properties
 	TArray<FProperty*> ImportProperties;
+	TArray<FString> SkippedColumns;
 	for (int32 i = PropertyStartCol; i < Headers.Num(); ++i)
 	{
 		FProperty* FoundProp = nullptr;
@@ -231,6 +232,15 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 			}
 		}
 		ImportProperties.Add(FoundProp); // nullの場合はスキップされる / null entries will be skipped
+		if (!FoundProp)
+		{
+			SkippedColumns.Add(Headers[i]);
+		}
+	}
+	if (!SkippedColumns.IsEmpty())
+	{
+		UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("CSV import: skipped %d unknown column(s): %s"),
+			SkippedColumns.Num(), *FString::Join(SkippedColumns, TEXT(", ")));
 	}
 
 	// 検索用マップを構築 / Build lookup maps for O(1) row matching
@@ -284,6 +294,7 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 
 		if (!FoundRow.IsValid() || !FoundRow->IsLoaded())
 		{
+			UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("CSV import: row '%s' not found or not loaded"), *Fields[0]);
 			++FailCount;
 			continue;
 		}
@@ -332,16 +343,24 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 
 	UE_LOG(LogDataAssetSheetEditor, Log, TEXT("CSV import complete: %d succeeded, %d failed"), SuccessCount, FailCount);
 
-	// 結果を通知（失敗がある場合は警告として表示）/ Notify result, warn if any failures
-	FNotificationInfo Info(FText::Format(
-		LOCTEXT("ImportCSVResult", "CSV import: {0} succeeded, {1} failed"),
-		FText::AsNumber(SuccessCount),
-		FText::AsNumber(FailCount)));
-	Info.ExpireDuration = (FailCount > 0) ? 6.0f : 3.0f;
+	// 結果を通知（失敗・スキップがある場合は警告として表示）/ Notify result, warn on failures or skipped columns
+	const bool bHasIssues = FailCount > 0 || !SkippedColumns.IsEmpty();
+	const FText ResultText = SkippedColumns.IsEmpty()
+		? FText::Format(
+			LOCTEXT("ImportCSVResult", "CSV import: {0} succeeded, {1} failed"),
+			FText::AsNumber(SuccessCount),
+			FText::AsNumber(FailCount))
+		: FText::Format(
+			LOCTEXT("ImportCSVResultWithSkipped", "CSV import: {0} succeeded, {1} failed ({2} column(s) skipped)"),
+			FText::AsNumber(SuccessCount),
+			FText::AsNumber(FailCount),
+			FText::AsNumber(SkippedColumns.Num()));
+	FNotificationInfo Info(ResultText);
+	Info.ExpireDuration = bHasIssues ? 6.0f : 3.0f;
 	TSharedPtr<SNotificationItem> Notification = FSlateNotificationManager::Get().AddNotification(Info);
 	if (Notification.IsValid())
 	{
-		Notification->SetCompletionState(FailCount > 0
+		Notification->SetCompletionState(bHasIssues
 			? SNotificationItem::CS_Fail
 			: SNotificationItem::CS_Success);
 	}
