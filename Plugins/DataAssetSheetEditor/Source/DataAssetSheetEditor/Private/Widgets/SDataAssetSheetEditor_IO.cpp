@@ -68,6 +68,13 @@ namespace DataAssetSheetEditorNotify
 	{
 		ShowResult(Message, false);
 	}
+
+	// 値文字列をログ出力用に短縮（巨大な struct リテラル等のスパム対策）
+	// Truncate a value string for log output (avoid log spam from huge struct literals)
+	static FString TruncateForLog(const FString& InValue, int32 MaxLen = 120)
+	{
+		return InValue.Len() <= MaxLen ? InValue : (InValue.Left(MaxLen) + TEXT("..."));
+	}
 }
 
 FReply SDataAssetSheetEditor::OnExportCSVClicked()
@@ -271,6 +278,7 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 
 	int32 SuccessCount = 0;
 	int32 FailCount = 0;
+	int32 PartialFailCount = 0;
 	TArray<TSharedPtr<FDataAssetRowData>> ModifiedRows;
 
 	// データ行をインポート / Import data rows
@@ -315,6 +323,9 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 		}
 		Asset->Modify();
 
+		bool bRowHadError = false;
+		bool bRowHadSuccess = false;
+
 		// 各プロパティの値をインポート / Import each property value
 		for (int32 PropIndex = 0; PropIndex < ImportProperties.Num(); ++PropIndex)
 		{
@@ -338,16 +349,46 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 			if (FTextProperty* TextProp = CastField<FTextProperty>(Prop))
 			{
 				TextProp->SetPropertyValue(ValuePtr, FText::FromString(ValueStr));
+				bRowHadSuccess = true;
 			}
 			else
 			{
-				Prop->ImportText_Direct(*ValueStr, ValuePtr, Asset, PPF_None);
+				const TCHAR* ImportResult = Prop->ImportText_Direct(*ValueStr, ValuePtr, Asset, PPF_None);
+				if (ImportResult == nullptr)
+				{
+					UE_LOG(LogDataAssetSheetEditor, Warning,
+						TEXT("CSV import: failed to parse value for row '%s' property '%s' value '%s'"),
+						*Fields[0], *Prop->GetName(), *DataAssetSheetEditorNotify::TruncateForLog(ValueStr));
+					bRowHadError = true;
+				}
+				else
+				{
+					bRowHadSuccess = true;
+				}
 			}
 		}
 
-		Asset->MarkPackageDirty();
-		ModifiedRows.Add(FoundRow);
-		++SuccessCount;
+		if (bRowHadSuccess)
+		{
+			Asset->MarkPackageDirty();
+			ModifiedRows.Add(FoundRow);
+		}
+
+		if (bRowHadError)
+		{
+			if (bRowHadSuccess)
+			{
+				++PartialFailCount;
+			}
+			else
+			{
+				++FailCount;
+			}
+		}
+		else
+		{
+			++SuccessCount;
+		}
 	}
 
 	// 編集された行のキャッシュを更新 / Refresh display text cache for modified rows
@@ -360,20 +401,27 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 	Model->ReapplyFilter();
 	AssetListView->RequestListRefresh();
 
-	UE_LOG(LogDataAssetSheetEditor, Log, TEXT("CSV import complete: %d succeeded, %d failed"), SuccessCount, FailCount);
+	UE_LOG(LogDataAssetSheetEditor, Log, TEXT("CSV import complete: %d succeeded, %d failed, %d partial"), SuccessCount, FailCount, PartialFailCount);
 
-	// 結果を通知（失敗・スキップがある場合は警告として表示）/ Notify result, warn on failures or skipped columns
-	const bool bHasIssues = FailCount > 0 || !SkippedColumns.IsEmpty();
-	const FText ResultText = SkippedColumns.IsEmpty()
+	// 結果を通知（失敗・スキップ・部分失敗がある場合は警告として表示）/ Notify result, warn on failures, skipped columns, or partial failures
+	const bool bHasIssues = FailCount > 0 || PartialFailCount > 0 || !SkippedColumns.IsEmpty();
+	FText ResultText = PartialFailCount > 0
 		? FText::Format(
-			LOCTEXT("ImportCSVResult", "CSV import: {0} succeeded, {1} failed"),
-			FText::AsNumber(SuccessCount),
-			FText::AsNumber(FailCount))
-		: FText::Format(
-			LOCTEXT("ImportCSVResultWithSkipped", "CSV import: {0} succeeded, {1} failed ({2} column(s) skipped)"),
+			LOCTEXT("ImportCSVResultWithPartial", "CSV import: {0} succeeded, {1} failed, {2} partial"),
 			FText::AsNumber(SuccessCount),
 			FText::AsNumber(FailCount),
+			FText::AsNumber(PartialFailCount))
+		: FText::Format(
+			LOCTEXT("ImportCSVResult", "CSV import: {0} succeeded, {1} failed"),
+			FText::AsNumber(SuccessCount),
+			FText::AsNumber(FailCount));
+	if (!SkippedColumns.IsEmpty())
+	{
+		ResultText = FText::Format(
+			LOCTEXT("ImportCSVResultSkippedSuffix", "{0} ({1} column(s) skipped)"),
+			ResultText,
 			FText::AsNumber(SkippedColumns.Num()));
+	}
 	DataAssetSheetEditorNotify::ShowResult(ResultText, !bHasIssues);
 
 	return FReply::Handled();
@@ -520,6 +568,8 @@ void SDataAssetSheetEditor::PasteOnSelectedRows()
 	FScopedTransaction Transaction(LOCTEXT("PasteRowData", "Paste Row Data"));
 
 	int32 SuccessCount = 0;
+	int32 FailCount = 0;
+	int32 PartialFailCount = 0;
 
 	// データ行を適用 / Apply data rows
 	for (int32 LineIndex = 1; LineIndex < Lines.Num(); ++LineIndex)
@@ -555,27 +605,31 @@ void SDataAssetSheetEditor::PasteOnSelectedRows()
 			}
 		}
 
-		// 選択行にマッチしない場合、選択行の順番で適用 / If no key match, apply by selection order
 		if (!TargetRow.IsValid())
 		{
-			int32 SelectionIndex = LineIndex - 1;
-			if (SelectionIndex < SelectedItems.Num())
-			{
-				TargetRow = SelectedItems[SelectionIndex];
-			}
+			UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("Paste: row '%s' not found in selection"), *Fields[0]);
+			++FailCount;
+			continue;
 		}
 
-		if (!TargetRow.IsValid() || !TargetRow->IsLoaded())
+		if (!TargetRow->IsLoaded())
 		{
+			UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("Paste: row '%s' is not loaded"), *Fields[0]);
+			++FailCount;
 			continue;
 		}
 
 		UDataAsset* Asset = TargetRow->Asset.Get();
 		if (!Asset)
 		{
+			UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("Paste: row '%s' has invalid asset reference"), *Fields[0]);
+			++FailCount;
 			continue;
 		}
 		Asset->Modify();
+
+		bool bRowHadError = false;
+		bool bRowHadSuccess = false;
 
 		for (int32 PropIndex = 0; PropIndex < PasteProperties.Num(); ++PropIndex)
 		{
@@ -600,32 +654,70 @@ void SDataAssetSheetEditor::PasteOnSelectedRows()
 			if (FTextProperty* TextProp = CastField<FTextProperty>(Prop))
 			{
 				TextProp->SetPropertyValue(ValuePtr, FText::FromString(ValueStr));
+				bRowHadSuccess = true;
 			}
 			else
 			{
-				Prop->ImportText_Direct(*ValueStr, ValuePtr, Asset, PPF_None);
+				const TCHAR* ImportResult = Prop->ImportText_Direct(*ValueStr, ValuePtr, Asset, PPF_None);
+				if (ImportResult == nullptr)
+				{
+					UE_LOG(LogDataAssetSheetEditor, Warning,
+						TEXT("Paste: failed to parse value for row '%s' property '%s' value '%s'"),
+						*Fields[0], *Prop->GetName(), *DataAssetSheetEditorNotify::TruncateForLog(ValueStr));
+					bRowHadError = true;
+				}
+				else
+				{
+					bRowHadSuccess = true;
+				}
 			}
 		}
 
-		Asset->MarkPackageDirty();
-		Model->RebuildRowCache(TargetRow);
-		++SuccessCount;
+		if (bRowHadSuccess)
+		{
+			Asset->MarkPackageDirty();
+			Model->RebuildRowCache(TargetRow);
+		}
+
+		if (bRowHadError)
+		{
+			if (bRowHadSuccess)
+			{
+				++PartialFailCount;
+			}
+			else
+			{
+				++FailCount;
+			}
+		}
+		else
+		{
+			++SuccessCount;
+		}
 	}
 
-	if (SuccessCount > 0)
+	if (SuccessCount > 0 || PartialFailCount > 0)
 	{
 		// テーブル更新（フィルタ保持）/ Refresh table (preserve filter)
 		Model->ReapplyFilter();
 		AssetListView->RequestListRefresh();
 	}
 
-	UE_LOG(LogDataAssetSheetEditor, Log, TEXT("Pasted data to %d asset(s)"), SuccessCount);
+	UE_LOG(LogDataAssetSheetEditor, Log, TEXT("Paste complete: %d succeeded, %d failed, %d partial"), SuccessCount, FailCount, PartialFailCount);
 
 	// 結果を通知 / Notify result
-	const FText ResultText = FText::Format(
-		LOCTEXT("PasteResult", "Paste: {0} succeeded"),
-		FText::AsNumber(SuccessCount));
-	DataAssetSheetEditorNotify::ShowResult(ResultText, SuccessCount > 0);
+	const bool bHasIssues = FailCount > 0 || PartialFailCount > 0;
+	const FText ResultText = PartialFailCount > 0
+		? FText::Format(
+			LOCTEXT("PasteResultWithPartial", "Paste: {0} succeeded, {1} failed, {2} partial"),
+			FText::AsNumber(SuccessCount),
+			FText::AsNumber(FailCount),
+			FText::AsNumber(PartialFailCount))
+		: FText::Format(
+			LOCTEXT("PasteResult", "Paste: {0} succeeded, {1} failed"),
+			FText::AsNumber(SuccessCount),
+			FText::AsNumber(FailCount));
+	DataAssetSheetEditorNotify::ShowResult(ResultText, !bHasIssues);
 }
 
 
