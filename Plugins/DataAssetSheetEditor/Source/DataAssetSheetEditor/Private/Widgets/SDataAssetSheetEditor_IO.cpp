@@ -525,6 +525,7 @@ void SDataAssetSheetEditor::PasteOnSelectedRows()
 		}
 
 		Asset->MarkPackageDirty();
+		Model->RebuildRowCache(TargetRow);
 		++SuccessCount;
 	}
 
