@@ -8,6 +8,10 @@
 #include "CollectionManagerModule.h"
 #include "ICollectionContainer.h"
 #include "UObject/UnrealType.h"
+#include "Framework/Notifications/NotificationManager.h"
+#include "Widgets/Notifications/SNotificationList.h"
+
+#define LOCTEXT_NAMESPACE "FDataAssetSheetModel"
 
 DECLARE_CYCLE_STAT(TEXT("ApplyFilter"), STAT_DataAssetSheet_ApplyFilter, STATGROUP_DataAssetSheet);
 DECLARE_CYCLE_STAT(TEXT("SortByColumn"), STAT_DataAssetSheet_SortByColumn, STATGROUP_DataAssetSheet);
@@ -162,12 +166,17 @@ void FDataAssetSheetModel::RequestAsyncLoad(FOnAssetsLoaded OnCompleted)
 		FStreamableDelegate::CreateLambda([this, OnCompleted]()
 		{
 			// ロード完了：RowDataにアセット参照をセット / Load complete: set asset references
+			int32 FailedCount = 0;
 			for (TSharedPtr<FDataAssetRowData>& RowData : RowDataList)
 			{
 				UObject* LoadedObject = RowData->AssetPath.ResolveObject();
 				if (UDataAsset* DataAsset = Cast<UDataAsset>(LoadedObject))
 				{
 					RowData->Asset = DataAsset;
+				}
+				else
+				{
+					++FailedCount;
 				}
 			}
 
@@ -177,6 +186,22 @@ void FDataAssetSheetModel::RequestAsyncLoad(FOnAssetsLoaded OnCompleted)
 			RebuildAllRowCaches();
 
 			UE_LOG(LogDataAssetSheetEditor, Log, TEXT("Async load completed for %d assets"), RowDataList.Num());
+
+			// ロードに失敗したアセットがあればユーザーに通知 / Notify user about failed assets
+			if (FailedCount > 0)
+			{
+				UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("Failed to resolve %d asset(s) after async load"), FailedCount);
+				FNotificationInfo Info(FText::Format(
+					LOCTEXT("AsyncLoadFailed", "{0} asset(s) failed to load"),
+					FText::AsNumber(FailedCount)));
+				Info.ExpireDuration = 5.0f;
+				TSharedPtr<SNotificationItem> Notification = FSlateNotificationManager::Get().AddNotification(Info);
+				if (Notification.IsValid())
+				{
+					Notification->SetCompletionState(SNotificationItem::CS_Fail);
+				}
+			}
+
 			OnCompleted.ExecuteIfBound();
 		})
 	);
@@ -290,6 +315,10 @@ void FDataAssetSheetModel::RebuildRowCache(const TSharedPtr<FDataAssetRowData>& 
 	}
 
 	UDataAsset* Asset = RowData->Asset.Get();
+	if (!Asset)
+	{
+		return;
+	}
 	for (FProperty* Prop : ColumnProperties)
 	{
 		if (!ClassHasProperty(Asset->GetClass(), Prop))
@@ -308,7 +337,7 @@ void FDataAssetSheetModel::RebuildRowCacheForProperty(const TSharedPtr<FDataAsse
 	}
 
 	UDataAsset* Asset = RowData->Asset.Get();
-	if (!ClassHasProperty(Asset->GetClass(), InProperty))
+	if (!Asset || !ClassHasProperty(Asset->GetClass(), InProperty))
 	{
 		return;
 	}
@@ -442,3 +471,5 @@ void FDataAssetSheetModel::SortByColumn(const FName& ColumnId, EColumnSortMode::
 		return (InSortMode == EColumnSortMode::Ascending) ? (Result < 0) : (Result > 0);
 	});
 }
+
+#undef LOCTEXT_NAMESPACE
