@@ -51,15 +51,22 @@ DECLARE_CYCLE_STAT(TEXT("ExportCSV"), STAT_DataAssetSheet_ExportCSV, STATGROUP_D
 
 namespace DataAssetSheetEditorNotify
 {
-	static void ShowFailure(const FText& Message)
+	static void ShowResult(const FText& Message, bool bIsSuccess, float ExpireDuration = 0.0f)
 	{
 		FNotificationInfo Info(Message);
-		Info.ExpireDuration = 6.0f;
+		Info.ExpireDuration = ExpireDuration > 0.0f ? ExpireDuration : (bIsSuccess ? 3.0f : 6.0f);
 		TSharedPtr<SNotificationItem> Notification = FSlateNotificationManager::Get().AddNotification(Info);
 		if (Notification.IsValid())
 		{
-			Notification->SetCompletionState(SNotificationItem::CS_Fail);
+			Notification->SetCompletionState(bIsSuccess
+				? SNotificationItem::CS_Success
+				: SNotificationItem::CS_Fail);
 		}
+	}
+
+	static void ShowFailure(const FText& Message)
+	{
+		ShowResult(Message, false);
 	}
 }
 
@@ -367,15 +374,7 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 			FText::AsNumber(SuccessCount),
 			FText::AsNumber(FailCount),
 			FText::AsNumber(SkippedColumns.Num()));
-	FNotificationInfo Info(ResultText);
-	Info.ExpireDuration = bHasIssues ? 6.0f : 3.0f;
-	TSharedPtr<SNotificationItem> Notification = FSlateNotificationManager::Get().AddNotification(Info);
-	if (Notification.IsValid())
-	{
-		Notification->SetCompletionState(bHasIssues
-			? SNotificationItem::CS_Fail
-			: SNotificationItem::CS_Success);
-	}
+	DataAssetSheetEditorNotify::ShowResult(ResultText, !bHasIssues);
 
 	return FReply::Handled();
 }
