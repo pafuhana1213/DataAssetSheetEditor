@@ -151,6 +151,24 @@ void FDataAssetSheetEditorToolkit::FillToolbar(FToolBarBuilder& ToolbarBuilder)
 			FSlateIcon(FAppStyle::GetAppStyleSetName(), "AssetEditor.SaveAsset"));
 	}
 	ToolbarBuilder.EndSection();
+
+	ToolbarBuilder.BeginSection("DataAssetSheetColumns");
+	{
+		ToolbarBuilder.AddToolBarButton(
+			FUIAction(FExecuteAction::CreateSP(EditorWidget.ToSharedRef(), &SDataAssetSheetEditor::AutoFitAllColumnWidths)),
+			NAME_None,
+			LOCTEXT("AutoFitColumnsText", "Auto-Fit Columns"),
+			LOCTEXT("AutoFitColumnsTooltip", "Resize every column (including hidden ones) to fit header + all row values, clamped to 32-600px"),
+			FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Adjust"));
+
+		ToolbarBuilder.AddToolBarButton(
+			FUIAction(FExecuteAction::CreateSP(EditorWidget.ToSharedRef(), &SDataAssetSheetEditor::ResetAllColumnWidths)),
+			NAME_None,
+			LOCTEXT("ResetColumnsText", "Reset Widths"),
+			LOCTEXT("ResetColumnsTooltip", "Reset every column width back to the default"),
+			FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Refresh"));
+	}
+	ToolbarBuilder.EndSection();
 }
 
 void FDataAssetSheetEditorToolkit::OnTargetClassHyperlinkClicked()
