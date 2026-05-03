@@ -513,6 +513,192 @@ void SDataAssetSheetEditor::OnColumnWidthChanged(float NewWidth, FName ColumnId)
 	ColumnWidths.Add(ColumnId, NewWidth);
 }
 
+float SDataAssetSheetEditor::ComputeAutoFitWidthForColumn(FName ColumnId, FProperty* Property) const
+{
+	if (!Model.IsValid())
+	{
+		return DefaultColumnWidth;
+	}
+
+	const FSlateFontInfo Font = FCoreStyle::Get().GetFontStyle(TEXT("NormalFont"));
+
+	// ヘッダー幅: ラベル文字列を実測 + ソート矢印分の余白
+	// Header width: measured label + sort arrow allowance
+	const FString HeaderLabel = Property
+		? ColumnId.ToString()
+		: LOCTEXT("AssetName", "Asset Name").ToString();
+	const float HeaderWidth = MeasureMaxLineWidth(HeaderLabel, Font) + AutoFitHeaderSortIndicator;
+
+	// セル測定戦略を型ごとに切り替える / Switch cell-measure strategy per property type
+	float MaxCellWidth = 0.0f;
+	float TypeMinWidth = MinColumnWidth;
+	bool bMeasureFromCachedText = (Property == nullptr); // AssetName 列は常に CachedDisplayText 相当 (RowData->AssetName) を使う
+
+	if (Property)
+	{
+		// Aパターン: テキスト描画がない型 → セル測定はスキップしヘッダーと型下限のみで決める
+		// A-pattern: cells render no text → only header/type-min decide width
+		if (CastField<FBoolProperty>(Property))
+		{
+			TypeMinWidth = 32.0f; // チェックボックス / checkbox
+		}
+		else if (CastField<FObjectProperty>(Property) || CastField<FSoftObjectProperty>(Property))
+		{
+			TypeMinWidth = 80.0f; // サムネイル / thumbnail
+		}
+		else if (const FStructProperty* StructProp = CastField<FStructProperty>(Property))
+		{
+			const UScriptStruct* S = StructProp->Struct;
+
+			if (S == TBaseStructure<FLinearColor>::Get() || S == TBaseStructure<FColor>::Get())
+			{
+				TypeMinWidth = 80.0f; // カラースウォッチ / color swatch
+			}
+			// Bパターン: テキストは表示するが ExportText 形式が表示と異なる → セル相当の文字を再構築して測る
+			// B-pattern: cell shows text, but ExportText differs from on-screen text → rebuild and measure
+			else if (S == FGameplayTag::StaticStruct())
+			{
+				for (const TSharedPtr<FDataAssetRowData>& RowData : Model->GetRowDataList())
+				{
+					if (!RowData.IsValid() || !RowData->IsLoaded()) continue;
+					UDataAsset* Asset = RowData->Asset.Get();
+					if (!Asset || !Model->AssetHasProperty(Asset, Property)) continue;
+					const FGameplayTag* TagPtr = StructProp->ContainerPtrToValuePtr<FGameplayTag>(Asset);
+					if (!TagPtr || !TagPtr->IsValid()) continue;
+					MaxCellWidth = FMath::Max(MaxCellWidth,
+						MeasureMaxLineWidth(TagPtr->GetTagName().ToString(), Font));
+				}
+			}
+			else if (S == FGameplayTagContainer::StaticStruct())
+			{
+				// セルは \n で結合表示するため、最長 1 タグの幅でフィットする
+				// Cell joins tag names with \n → fit the widest single tag
+				for (const TSharedPtr<FDataAssetRowData>& RowData : Model->GetRowDataList())
+				{
+					if (!RowData.IsValid() || !RowData->IsLoaded()) continue;
+					UDataAsset* Asset = RowData->Asset.Get();
+					if (!Asset || !Model->AssetHasProperty(Asset, Property)) continue;
+					const FGameplayTagContainer* ContainerPtr =
+						StructProp->ContainerPtrToValuePtr<FGameplayTagContainer>(Asset);
+					if (!ContainerPtr || ContainerPtr->IsEmpty()) continue;
+					for (const FGameplayTag& T : *ContainerPtr)
+					{
+						MaxCellWidth = FMath::Max(MaxCellWidth,
+							MeasureMaxLineWidth(T.GetTagName().ToString(), Font));
+					}
+				}
+			}
+			else
+			{
+				// その他の構造体型は CachedDisplayText を測る (Cパターン)
+				bMeasureFromCachedText = true;
+			}
+		}
+		else
+		{
+			// Numeric / Name / String / Text / Enum / Array 等
+			bMeasureFromCachedText = true;
+		}
+	}
+
+	// Cパターン: CachedDisplayText (またはAssetName) を測る
+	// C-pattern: measure CachedDisplayText (or AssetName for the asset-name column)
+	if (bMeasureFromCachedText)
+	{
+		const bool bIsAssetNameColumn = (Property == nullptr);
+		for (const TSharedPtr<FDataAssetRowData>& RowData : Model->GetRowDataList())
+		{
+			if (!RowData.IsValid())
+			{
+				continue;
+			}
+
+			FString CellText;
+			if (bIsAssetNameColumn)
+			{
+				// Dirty マークの "* " 2 文字分も常に確保しておく / always reserve "* " for dirty marker
+				CellText = TEXT("* ") + RowData->AssetName;
+			}
+			else
+			{
+				const FString* Cached = RowData->CachedDisplayText.Find(ColumnId);
+				if (!Cached)
+				{
+					continue; // 未ロード行はスキップ / skip rows without cached text
+				}
+				CellText = *Cached;
+			}
+
+			MaxCellWidth = FMath::Max(MaxCellWidth, MeasureMaxLineWidth(CellText, Font));
+		}
+	}
+
+	const float ContentWidth = FMath::Max(HeaderWidth, MaxCellWidth) + AutoFitHorizontalPadding;
+	const float Raw = FMath::Max(ContentWidth, TypeMinWidth);
+	return FMath::Clamp(Raw, MinColumnWidth, MaxColumnWidth);
+}
+
+void SDataAssetSheetEditor::AutoFitAllColumnWidths()
+{
+	if (!Model.IsValid())
+	{
+		return;
+	}
+
+	// AssetName 列
+	ColumnWidths.Add(FName(TEXT("AssetName")), ComputeAutoFitWidthForColumn(FName(TEXT("AssetName")), nullptr));
+
+	// 全プロパティ列 (非表示列も含む)
+	for (FProperty* Prop : Model->GetColumnProperties())
+	{
+		const FName ColName = Prop->GetFName();
+		ColumnWidths.Add(ColName, ComputeAutoFitWidthForColumn(ColName, Prop));
+	}
+
+	SaveLayoutData();
+}
+
+void SDataAssetSheetEditor::AutoFitColumnWidth(FName ColumnId)
+{
+	if (!Model.IsValid())
+	{
+		return;
+	}
+
+	FProperty* Prop = nullptr;
+	if (ColumnId != FName(TEXT("AssetName")))
+	{
+		for (FProperty* P : Model->GetColumnProperties())
+		{
+			if (P && P->GetFName() == ColumnId)
+			{
+				Prop = P;
+				break;
+			}
+		}
+		if (!Prop)
+		{
+			return;
+		}
+	}
+
+	ColumnWidths.Add(ColumnId, ComputeAutoFitWidthForColumn(ColumnId, Prop));
+	SaveLayoutData();
+}
+
+void SDataAssetSheetEditor::ResetAllColumnWidths()
+{
+	if (!Model.IsValid())
+	{
+		return;
+	}
+
+	// 空にすれば ApplyColumnWidth のラムダが DefaultColumnWidth を返す
+	// Empty map → bound attribute returns DefaultColumnWidth for every column
+	ColumnWidths.Empty();
+	SaveLayoutData();
+}
+
 TSharedRef<ITableRow> SDataAssetSheetEditor::OnGenerateRow(TSharedPtr<FDataAssetRowData> InRowData, const TSharedRef<STableViewBase>& OwnerTable)
 {
 	const int32 Index = Model->GetFilteredRowDataList().IndexOfByKey(InRowData);

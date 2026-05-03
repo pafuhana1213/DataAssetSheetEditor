@@ -54,6 +54,12 @@ public:
 	void SaveAllModifiedAssets();
 	bool HasModifiedAssets() const;
 
+	// 全列を内容にフィット (非表示列も含む) / Auto-fit all columns including hidden ones
+	void AutoFitAllColumnWidths();
+
+	// 全列の幅をデフォルトに戻す / Reset every column to the default width
+	void ResetAllColumnWidths();
+
 private:
 	// テーブル構築 / Build table from model data
 	void RebuildTable();
@@ -66,6 +72,12 @@ private:
 
 	// 列幅変更コールバック / Callback when user resizes a column
 	void OnColumnWidthChanged(float NewWidth, FName ColumnId);
+
+	// 1列の必要幅を計算 / Compute auto-fit width for one column (Property==nullptr → AssetName column)
+	float ComputeAutoFitWidthForColumn(FName ColumnId, FProperty* Property) const;
+
+	// 指定列だけフィット / Auto-fit a single column (called from header menu)
+	void AutoFitColumnWidth(FName ColumnId);
 
 	// 行生成コールバック / Row generation callback for SListView
 	TSharedRef<ITableRow> OnGenerateRow(TSharedPtr<FDataAssetRowData> InRowData, const TSharedRef<STableViewBase>& OwnerTable);
