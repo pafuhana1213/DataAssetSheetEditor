@@ -43,10 +43,44 @@
 #include "Framework/Notifications/NotificationManager.h"
 #include "Widgets/Notifications/SNotificationList.h"
 #include "AssetThumbnail.h"
+#include "Fonts/FontMeasure.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Styling/CoreStyle.h"
+#include "GameplayTagContainer.h"
 
 // 列幅の既定値と最小値 / Default and minimum column widths (pixels)
 static constexpr float DefaultColumnWidth = 150.0f;
 static constexpr float MinColumnWidth = 32.0f;
+
+// Auto-fit 関連の定数 / Auto-fit related constants
+static constexpr float MaxColumnWidth = 600.0f;
+static constexpr float AutoFitHorizontalPadding = 16.0f;   // セル左右4px×2 + 余裕8px / cell horizontal padding + slack
+static constexpr float AutoFitHeaderSortIndicator = 18.0f; // ソート矢印分の余白 / sort arrow allowance
+
+// 文字列の描画幅を測る (改行入りなら最長行を返す) / Measure rendering width, taking the longest line for multiline strings
+static float MeasureMaxLineWidth(const FString& InText, const FSlateFontInfo& InFont)
+{
+	if (InText.IsEmpty())
+	{
+		return 0.0f;
+	}
+
+	const TSharedRef<FSlateFontMeasure> Measure = FSlateApplication::Get().GetRenderer()->GetFontMeasureService();
+
+	if (!InText.Contains(TEXT("\n")))
+	{
+		return Measure->Measure(InText, InFont).X;
+	}
+
+	float MaxWidth = 0.0f;
+	TArray<FString> Lines;
+	InText.ParseIntoArrayLines(Lines, /*bCullEmpty=*/false);
+	for (const FString& Line : Lines)
+	{
+		MaxWidth = FMath::Max(MaxWidth, static_cast<float>(Measure->Measure(Line, InFont).X));
+	}
+	return MaxWidth;
+}
 
 #define LOCTEXT_NAMESPACE "SDataAssetSheetEditor"
 
