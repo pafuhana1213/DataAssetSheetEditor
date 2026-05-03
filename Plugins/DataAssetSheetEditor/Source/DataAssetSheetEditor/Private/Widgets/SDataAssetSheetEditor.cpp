@@ -427,7 +427,11 @@ void SDataAssetSheetEditor::RebuildHeaderRow()
 			.DefaultLabel(LOCTEXT("AssetName", "Asset Name"))
 			.SortMode(TAttribute<EColumnSortMode::Type>::CreateSP(this, &SDataAssetSheetEditor::GetSortModeForColumn, AssetNameCol))
 			.OnSort(FOnSortModeChanged::CreateSP(this, &SDataAssetSheetEditor::OnSortModeChanged))
-			.OnWidthChanged(FOnWidthChanged::CreateSP(this, &SDataAssetSheetEditor::OnColumnWidthChanged, AssetNameCol));
+			.OnWidthChanged(FOnWidthChanged::CreateSP(this, &SDataAssetSheetEditor::OnColumnWidthChanged, AssetNameCol))
+			.MenuContent()
+			[
+				BuildColumnHeaderMenu(AssetNameCol, nullptr)
+			];
 		ApplyColumnWidth(ColArgs, AssetNameCol);
 		HeaderRow->AddColumn(ColArgs);
 	}
@@ -455,7 +459,11 @@ void SDataAssetSheetEditor::RebuildHeaderRow()
 			.ToolTipText(ColumnTooltip)
 			.SortMode(TAttribute<EColumnSortMode::Type>::CreateSP(this, &SDataAssetSheetEditor::GetSortModeForColumn, ColName))
 			.OnSort(FOnSortModeChanged::CreateSP(this, &SDataAssetSheetEditor::OnSortModeChanged))
-			.OnWidthChanged(FOnWidthChanged::CreateSP(this, &SDataAssetSheetEditor::OnColumnWidthChanged, ColName));
+			.OnWidthChanged(FOnWidthChanged::CreateSP(this, &SDataAssetSheetEditor::OnColumnWidthChanged, ColName))
+			.MenuContent()
+			[
+				BuildColumnHeaderMenu(ColName, Prop)
+			];
 		ApplyColumnWidth(ColArgs, ColName);
 		HeaderRow->AddColumn(ColArgs);
 	}
@@ -697,6 +705,24 @@ void SDataAssetSheetEditor::ResetAllColumnWidths()
 	// Empty map → bound attribute returns DefaultColumnWidth for every column
 	ColumnWidths.Empty();
 	SaveLayoutData();
+}
+
+TSharedRef<SWidget> SDataAssetSheetEditor::BuildColumnHeaderMenu(FName ColumnId, FProperty* Property)
+{
+	FMenuBuilder MenuBuilder(/*bShouldCloseWindowAfterMenuSelection=*/true, nullptr);
+
+	MenuBuilder.BeginSection(TEXT("ColumnActions"), LOCTEXT("ColumnActionsSection", "Column"));
+	{
+		MenuBuilder.AddMenuEntry(
+			LOCTEXT("AutoFitWidthEntry", "Auto-Fit Width"),
+			LOCTEXT("AutoFitWidthTooltip", "Resize this column to fit its content"),
+			FSlateIcon(),
+			FUIAction(FExecuteAction::CreateSP(this, &SDataAssetSheetEditor::AutoFitColumnWidth, ColumnId))
+		);
+	}
+	MenuBuilder.EndSection();
+
+	return MenuBuilder.MakeWidget();
 }
 
 TSharedRef<ITableRow> SDataAssetSheetEditor::OnGenerateRow(TSharedPtr<FDataAssetRowData> InRowData, const TSharedRef<STableViewBase>& OwnerTable)

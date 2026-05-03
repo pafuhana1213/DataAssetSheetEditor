@@ -79,6 +79,9 @@ private:
 	// 指定列だけフィット / Auto-fit a single column (called from header menu)
 	void AutoFitColumnWidth(FName ColumnId);
 
+	// 列ヘッダーのドロップダウンメニュー / Per-column header dropdown menu
+	TSharedRef<SWidget> BuildColumnHeaderMenu(FName ColumnId, FProperty* Property);
+
 	// 行生成コールバック / Row generation callback for SListView
 	TSharedRef<ITableRow> OnGenerateRow(TSharedPtr<FDataAssetRowData> InRowData, const TSharedRef<STableViewBase>& OwnerTable);
 
