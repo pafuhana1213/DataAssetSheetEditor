@@ -75,6 +75,55 @@ namespace DataAssetSheetEditorNotify
 	{
 		return InValue.Len() <= MaxLen ? InValue : (InValue.Left(MaxLen) + TEXT("..."));
 	}
+
+	static FString EscapeTSVField(const FString& InValue)
+	{
+		FString Escaped = InValue;
+		Escaped.ReplaceInline(TEXT("\\"), TEXT("\\\\"));
+		Escaped.ReplaceInline(TEXT("\t"), TEXT("\\t"));
+		Escaped.ReplaceInline(TEXT("\r"), TEXT("\\r"));
+		Escaped.ReplaceInline(TEXT("\n"), TEXT("\\n"));
+		return Escaped;
+	}
+
+	static FString UnescapeTSVField(const FString& InValue)
+	{
+		FString Result;
+		Result.Reserve(InValue.Len());
+
+		for (int32 Index = 0; Index < InValue.Len(); ++Index)
+		{
+			const TCHAR Ch = InValue[Index];
+			if (Ch != TEXT('\\') || Index + 1 >= InValue.Len())
+			{
+				Result.AppendChar(Ch);
+				continue;
+			}
+
+			const TCHAR Escaped = InValue[++Index];
+			switch (Escaped)
+			{
+			case TEXT('t'):
+				Result.AppendChar(TEXT('\t'));
+				break;
+			case TEXT('n'):
+				Result.AppendChar(TEXT('\n'));
+				break;
+			case TEXT('r'):
+				Result.AppendChar(TEXT('\r'));
+				break;
+			case TEXT('\\'):
+				Result.AppendChar(TEXT('\\'));
+				break;
+			default:
+				Result.AppendChar(TEXT('\\'));
+				Result.AppendChar(Escaped);
+				break;
+			}
+		}
+
+		return Result;
+	}
 }
 
 FReply SDataAssetSheetEditor::OnExportCSVClicked()
@@ -321,8 +370,6 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 			++FailCount;
 			continue;
 		}
-		Asset->Modify();
-
 		bool bRowHadError = false;
 		bool bRowHadSuccess = false;
 
@@ -342,35 +389,23 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 			{
 				continue;
 			}
-			void* ValuePtr = Prop->ContainerPtrToValuePtr<void>(Asset);
 			const FString& ValueStr = Fields[FieldIndex];
-
-			// FTextは特別処理 / Special handling for FText
-			if (FTextProperty* TextProp = CastField<FTextProperty>(Prop))
+			FString FailureReason;
+			if (Model->SetPropertyValueFromString(FoundRow, Prop, ValueStr, &FailureReason))
 			{
-				TextProp->SetPropertyValue(ValuePtr, FText::FromString(ValueStr));
 				bRowHadSuccess = true;
 			}
 			else
 			{
-				const TCHAR* ImportResult = Prop->ImportText_Direct(*ValueStr, ValuePtr, Asset, PPF_None);
-				if (ImportResult == nullptr)
-				{
-					UE_LOG(LogDataAssetSheetEditor, Warning,
-						TEXT("CSV import: failed to parse value for row '%s' property '%s' value '%s'"),
-						*Fields[0], *Prop->GetName(), *DataAssetSheetEditorNotify::TruncateForLog(ValueStr));
-					bRowHadError = true;
-				}
-				else
-				{
-					bRowHadSuccess = true;
-				}
+				UE_LOG(LogDataAssetSheetEditor, Warning,
+					TEXT("CSV import: failed to apply value for row '%s' property '%s' value '%s': %s"),
+					*Fields[0], *Prop->GetName(), *DataAssetSheetEditorNotify::TruncateForLog(ValueStr), *FailureReason);
+				bRowHadError = true;
 			}
 		}
 
 		if (bRowHadSuccess)
 		{
-			Asset->MarkPackageDirty();
 			ModifiedRows.Add(FoundRow);
 		}
 
@@ -400,6 +435,10 @@ FReply SDataAssetSheetEditor::OnImportCSVClicked()
 	// テーブル更新（フィルタ保持）/ Refresh table (preserve filter)
 	Model->ReapplyFilter();
 	AssetListView->RequestListRefresh();
+	if (DetailsView.IsValid())
+	{
+		DetailsView->ForceRefresh();
+	}
 
 	UE_LOG(LogDataAssetSheetEditor, Log, TEXT("CSV import complete: %d succeeded, %d failed, %d partial"), SuccessCount, FailCount, PartialFailCount);
 
@@ -459,19 +498,15 @@ void SDataAssetSheetEditor::CopySelectedRows()
 			continue;
 		}
 
-		ClipboardContent += Item->AssetPath.ToString();
+		ClipboardContent += DataAssetSheetEditorNotify::EscapeTSVField(Item->AssetPath.ToString());
 		ClipboardContent += TEXT("\t");
-		ClipboardContent += Item->AssetName;
+		ClipboardContent += DataAssetSheetEditorNotify::EscapeTSVField(Item->AssetName);
 
 		for (FProperty* Prop : ColumnProperties)
 		{
 			ClipboardContent += TEXT("\t");
-			FString ValueText = Model->GetPropertyValueText(Item->Asset.Get(), Prop);
-			// タブと改行をエスケープ / Escape tabs and newlines
-			ValueText.ReplaceInline(TEXT("\t"), TEXT("\\t"));
-			ValueText.ReplaceInline(TEXT("\n"), TEXT("\\n"));
-			ValueText.ReplaceInline(TEXT("\r"), TEXT(""));
-			ClipboardContent += ValueText;
+			ClipboardContent += DataAssetSheetEditorNotify::EscapeTSVField(
+				Model->GetPropertyValueText(Item->Asset.Get(), Prop));
 		}
 		ClipboardContent += TEXT("\n");
 	}
@@ -587,6 +622,7 @@ void SDataAssetSheetEditor::PasteOnSelectedRows()
 		{
 			continue;
 		}
+		Fields[0] = DataAssetSheetEditorNotify::UnescapeTSVField(Fields[0]);
 
 		// キーで選択行を検索 / Find matching selected row by key
 		TSharedPtr<FDataAssetRowData> TargetRow;
@@ -626,8 +662,6 @@ void SDataAssetSheetEditor::PasteOnSelectedRows()
 			++FailCount;
 			continue;
 		}
-		Asset->Modify();
-
 		bool bRowHadError = false;
 		bool bRowHadSuccess = false;
 
@@ -644,38 +678,24 @@ void SDataAssetSheetEditor::PasteOnSelectedRows()
 			{
 				continue;
 			}
-			void* ValuePtr = Prop->ContainerPtrToValuePtr<void>(Asset);
-			FString ValueStr = Fields[FieldIndex];
+			FString ValueStr = DataAssetSheetEditorNotify::UnescapeTSVField(Fields[FieldIndex]);
 
-			// エスケープを復元 / Unescape tabs and newlines
-			ValueStr.ReplaceInline(TEXT("\\t"), TEXT("\t"));
-			ValueStr.ReplaceInline(TEXT("\\n"), TEXT("\n"));
-
-			if (FTextProperty* TextProp = CastField<FTextProperty>(Prop))
+			FString FailureReason;
+			if (Model->SetPropertyValueFromString(TargetRow, Prop, ValueStr, &FailureReason))
 			{
-				TextProp->SetPropertyValue(ValuePtr, FText::FromString(ValueStr));
 				bRowHadSuccess = true;
 			}
 			else
 			{
-				const TCHAR* ImportResult = Prop->ImportText_Direct(*ValueStr, ValuePtr, Asset, PPF_None);
-				if (ImportResult == nullptr)
-				{
-					UE_LOG(LogDataAssetSheetEditor, Warning,
-						TEXT("Paste: failed to parse value for row '%s' property '%s' value '%s'"),
-						*Fields[0], *Prop->GetName(), *DataAssetSheetEditorNotify::TruncateForLog(ValueStr));
-					bRowHadError = true;
-				}
-				else
-				{
-					bRowHadSuccess = true;
-				}
+				UE_LOG(LogDataAssetSheetEditor, Warning,
+					TEXT("Paste: failed to apply value for row '%s' property '%s' value '%s': %s"),
+					*Fields[0], *Prop->GetName(), *DataAssetSheetEditorNotify::TruncateForLog(ValueStr), *FailureReason);
+				bRowHadError = true;
 			}
 		}
 
 		if (bRowHadSuccess)
 		{
-			Asset->MarkPackageDirty();
 			Model->RebuildRowCache(TargetRow);
 		}
 
@@ -701,6 +721,10 @@ void SDataAssetSheetEditor::PasteOnSelectedRows()
 		// テーブル更新（フィルタ保持）/ Refresh table (preserve filter)
 		Model->ReapplyFilter();
 		AssetListView->RequestListRefresh();
+		if (DetailsView.IsValid())
+		{
+			DetailsView->ForceRefresh();
+		}
 	}
 
 	UE_LOG(LogDataAssetSheetEditor, Log, TEXT("Paste complete: %d succeeded, %d failed, %d partial"), SuccessCount, FailCount, PartialFailCount);

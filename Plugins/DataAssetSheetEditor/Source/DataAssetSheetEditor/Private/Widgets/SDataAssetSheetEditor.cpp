@@ -29,6 +29,7 @@
 #include "Widgets/Input/SSearchBox.h"
 #include "DesktopPlatformModule.h"
 #include "Misc/FileHelper.h"
+#include "HAL/FileManager.h"
 #include "HAL/PlatformApplicationMisc.h"
 #include "IAssetTools.h"
 #include "AssetToolsModule.h"
@@ -80,6 +81,13 @@ static float MeasureMaxLineWidth(const FString& InText, const FSlateFontInfo& In
 		MaxWidth = FMath::Max(MaxWidth, static_cast<float>(Measure->Measure(Line, InFont).X));
 	}
 	return MaxWidth;
+}
+
+static FString GetLayoutFilenameForSheet(const UDataAssetSheet* Sheet)
+{
+	const FString LayoutDir = FPaths::ProjectSavedDir() / TEXT("AssetData") / TEXT("DataAssetSheetLayout");
+	const FString SheetKey = Sheet ? FPaths::MakeValidFileName(Sheet->GetPathName()) : TEXT("InvalidSheet");
+	return LayoutDir / (SheetKey + TEXT(".json"));
 }
 
 #define LOCTEXT_NAMESPACE "SDataAssetSheetEditor"
@@ -940,7 +948,7 @@ void SDataAssetSheetEditor::LoadLayoutData()
 		return;
 	}
 
-	const FString LayoutFilename = FPaths::ProjectSavedDir() / TEXT("AssetData") / TEXT("DataAssetSheetLayout") / Sheet->GetName() + TEXT(".json");
+	const FString LayoutFilename = GetLayoutFilenameForSheet(Sheet);
 
 	FString JsonText;
 	if (FFileHelper::LoadFileToString(JsonText, *LayoutFilename))
@@ -1038,7 +1046,9 @@ void SDataAssetSheetEditor::SaveLayoutData()
 		LayoutData->RemoveField(TEXT("SortMode"));
 	}
 
-	const FString LayoutFilename = FPaths::ProjectSavedDir() / TEXT("AssetData") / TEXT("DataAssetSheetLayout") / Sheet->GetName() + TEXT(".json");
+	const FString LayoutFilename = GetLayoutFilenameForSheet(Sheet);
+	const FString LayoutDir = FPaths::GetPath(LayoutFilename);
+	IFileManager::Get().MakeDirectory(*LayoutDir, /*Tree=*/true);
 
 	FString JsonText;
 	TSharedRef<TJsonWriter<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>> JsonWriter = TJsonWriterFactory<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>::Create(&JsonText);
@@ -1142,20 +1152,45 @@ void SDataAssetSheetEditor::OnAssetAdded(const FAssetData& AssetData)
 		return;
 	}
 
-	// bShowAll=false の場合は自動追加しない / Do not auto-add when bShowAll is false
 	UDataAssetSheet* Sheet = DataAssetSheet.Get();
-	if (Sheet && !Sheet->bShowAll)
+	if (!Sheet)
 	{
 		return;
 	}
 
+	const FSoftObjectPath AssetPath = AssetData.GetSoftObjectPath();
+
+	// bShowAll=false の場合は ManualAssets に登録済みのものだけ表示する
+	// When bShowAll is false, only show assets already registered in ManualAssets.
+	if (!Sheet->bShowAll)
+	{
+		const bool bRegisteredManually = Sheet->ManualAssets.ContainsByPredicate(
+			[&AssetPath](const TSoftObjectPtr<UDataAsset>& SoftPtr)
+			{
+				return SoftPtr.ToSoftObjectPath() == AssetPath;
+			});
+		if (!bRegisteredManually)
+		{
+			return;
+		}
+	}
+
+	for (const TSharedPtr<FDataAssetRowData>& ExistingRow : Model->GetRowDataList())
+	{
+		if (ExistingRow.IsValid() && ExistingRow->AssetPath == AssetPath)
+		{
+			return;
+		}
+	}
+
 	// 新しいRowDataを追加 / Add new row data
 	TSharedPtr<FDataAssetRowData> NewRowData = MakeShared<FDataAssetRowData>();
-	NewRowData->AssetPath = AssetData.GetSoftObjectPath();
+	NewRowData->AssetPath = AssetPath;
 	NewRowData->AssetName = AssetData.AssetName.ToString();
+	NewRowData->AssetClass = AssetData.GetClass();
 
 	// 既にロード済みならアセット参照をセット / Set asset reference if already loaded
-	if (UObject* LoadedObject = AssetData.GetSoftObjectPath().ResolveObject())
+	if (UObject* LoadedObject = AssetPath.ResolveObject())
 	{
 		if (UDataAsset* DataAsset = Cast<UDataAsset>(LoadedObject))
 		{
@@ -1184,10 +1219,15 @@ void SDataAssetSheetEditor::OnAssetRemoved(const FAssetData& AssetData)
 	UDataAssetSheet* Sheet = DataAssetSheet.Get();
 	if (Sheet)
 	{
-		Sheet->ManualAssets.RemoveAll([&RemovedPath](const TSoftObjectPtr<UDataAsset>& SoftPtr)
+		Sheet->Modify();
+		const int32 RemovedManualCount = Sheet->ManualAssets.RemoveAll([&RemovedPath](const TSoftObjectPtr<UDataAsset>& SoftPtr)
 		{
 			return SoftPtr.ToSoftObjectPath() == RemovedPath;
 		});
+		if (RemovedManualCount > 0)
+		{
+			Sheet->MarkPackageDirty();
+		}
 	}
 
 	TArray<TSharedPtr<FDataAssetRowData>>& RowDataList = Model->GetMutableRowDataList();
@@ -1229,12 +1269,37 @@ void SDataAssetSheetEditor::OnAssetRenamed(const FAssetData& AssetData, const FS
 
 	// リネームされたアセットのRowDataを更新 / Update row data for renamed asset
 	FSoftObjectPath OldPath(OldObjectPath);
+	const FSoftObjectPath NewPath = AssetData.GetSoftObjectPath();
+
+	UDataAssetSheet* Sheet = DataAssetSheet.Get();
+	if (Sheet)
+	{
+		bool bUpdatedManualAsset = false;
+		for (TSoftObjectPtr<UDataAsset>& SoftPtr : Sheet->ManualAssets)
+		{
+			if (SoftPtr.ToSoftObjectPath() == OldPath)
+			{
+				if (!bUpdatedManualAsset)
+				{
+					Sheet->Modify();
+					bUpdatedManualAsset = true;
+				}
+				SoftPtr = TSoftObjectPtr<UDataAsset>(NewPath);
+			}
+		}
+		if (bUpdatedManualAsset)
+		{
+			Sheet->MarkPackageDirty();
+		}
+	}
+
 	for (TSharedPtr<FDataAssetRowData>& RowData : Model->GetMutableRowDataList())
 	{
 		if (RowData->AssetPath == OldPath)
 		{
-			RowData->AssetPath = AssetData.GetSoftObjectPath();
+			RowData->AssetPath = NewPath;
 			RowData->AssetName = AssetData.AssetName.ToString();
+			RowData->AssetClass = AssetData.GetClass();
 			break;
 		}
 	}

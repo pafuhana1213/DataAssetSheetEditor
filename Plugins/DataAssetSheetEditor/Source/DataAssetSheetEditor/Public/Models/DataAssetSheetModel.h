@@ -69,6 +69,11 @@ public:
 	// プロパティ値をテキストとして取得 / Get property value as display text
 	FString GetPropertyValueText(UDataAsset* InAsset, FProperty* InProperty) const;
 
+	// 文字列からプロパティ値を安全に適用（Undo/PostEditChange/Dirty/Cache更新込み）
+	// Safely apply a property value from text, including Undo/PostEditChange/Dirty/cache updates.
+	bool SetPropertyValueFromString(const TSharedPtr<FDataAssetRowData>& RowData, FProperty* InProperty,
+		const FString& InValue, FString* OutFailureReason = nullptr) const;
+
 	// 行の表示文字列キャッシュを再構築 / Rebuild cached display text for a single row
 	void RebuildRowCache(const TSharedPtr<FDataAssetRowData>& RowData) const;
 

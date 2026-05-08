@@ -300,6 +300,75 @@ FString FDataAssetSheetModel::GetPropertyValueText(UDataAsset* InAsset, FPropert
 	return ValueString;
 }
 
+bool FDataAssetSheetModel::SetPropertyValueFromString(const TSharedPtr<FDataAssetRowData>& RowData,
+	FProperty* InProperty, const FString& InValue, FString* OutFailureReason) const
+{
+	if (OutFailureReason)
+	{
+		OutFailureReason->Reset();
+	}
+
+	if (!RowData.IsValid() || !RowData->IsLoaded() || InProperty == nullptr)
+	{
+		if (OutFailureReason)
+		{
+			*OutFailureReason = TEXT("row is not loaded or property is invalid");
+		}
+		return false;
+	}
+
+	UDataAsset* TargetAsset = RowData->Asset.Get();
+	if (!TargetAsset || !AssetHasProperty(TargetAsset, InProperty))
+	{
+		if (OutFailureReason)
+		{
+			*OutFailureReason = TEXT("asset does not own the property");
+		}
+		return false;
+	}
+
+	void* ValuePtr = InProperty->ContainerPtrToValuePtr<void>(TargetAsset);
+	uint8* TempValue = static_cast<uint8*>(FMemory_Alloca(InProperty->GetSize()));
+	InProperty->InitializeValue(TempValue);
+	InProperty->CopyCompleteValue(TempValue, ValuePtr);
+
+	bool bParsed = true;
+	if (FTextProperty* TextProp = CastField<FTextProperty>(InProperty))
+	{
+		TextProp->SetPropertyValue(TempValue, FText::FromString(InValue));
+	}
+	else
+	{
+		const TCHAR* ImportResult = InProperty->ImportText_Direct(*InValue, TempValue, TargetAsset, PPF_None);
+		bParsed = (ImportResult != nullptr);
+	}
+
+	if (!bParsed)
+	{
+		InProperty->DestroyValue(TempValue);
+		if (OutFailureReason)
+		{
+			*OutFailureReason = TEXT("failed to parse value");
+		}
+		return false;
+	}
+
+	if (!InProperty->Identical(ValuePtr, TempValue))
+	{
+		TargetAsset->Modify();
+		TargetAsset->PreEditChange(InProperty);
+		InProperty->CopyCompleteValue(ValuePtr, TempValue);
+
+		FPropertyChangedEvent PropertyChangedEvent(InProperty, EPropertyChangeType::ValueSet);
+		TargetAsset->PostEditChangeProperty(PropertyChangedEvent);
+		TargetAsset->MarkPackageDirty();
+	}
+
+	InProperty->DestroyValue(TempValue);
+	RebuildRowCacheForProperty(RowData, InProperty);
+	return true;
+}
+
 void FDataAssetSheetModel::RebuildRowCache(const TSharedPtr<FDataAssetRowData>& RowData) const
 {
 	if (!RowData.IsValid())

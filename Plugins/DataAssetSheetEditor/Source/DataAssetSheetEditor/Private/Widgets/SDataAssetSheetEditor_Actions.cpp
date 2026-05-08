@@ -47,6 +47,33 @@
 
 #define LOCTEXT_NAMESPACE "SDataAssetSheetEditor"
 
+namespace
+{
+	bool AddAssetToManualAssets(UDataAssetSheet* Sheet, UDataAsset* Asset)
+	{
+		if (!Sheet || !Asset)
+		{
+			return false;
+		}
+
+		const FSoftObjectPath AssetPath(Asset);
+		const bool bAlreadyRegistered = Sheet->ManualAssets.ContainsByPredicate(
+			[&AssetPath](const TSoftObjectPtr<UDataAsset>& Existing)
+			{
+				return Existing.ToSoftObjectPath() == AssetPath;
+			});
+		if (bAlreadyRegistered)
+		{
+			return false;
+		}
+
+		Sheet->Modify();
+		Sheet->ManualAssets.Add(TSoftObjectPtr<UDataAsset>(AssetPath));
+		Sheet->MarkPackageDirty();
+		return true;
+	}
+}
+
 void SDataAssetSheetEditor::BindCommands(const TSharedRef<FUICommandList>& InCommandList)
 {
 	CommandList = InCommandList;
@@ -224,8 +251,22 @@ void SDataAssetSheetEditor::CreateNewAsset()
 	// Create asset with save dialog, skip class picker since TargetClass is already known
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 	FString DefaultPath = FPackageName::GetLongPackagePath(Sheet->GetPathName());
-	AssetTools.CreateAssetWithDialog(Sheet->TargetClass->GetName(), DefaultPath, Sheet->TargetClass, Factory, NAME_None, /*bCallConfigureProperties=*/ false);
-	// OnAssetAddedフックで自動的にテーブル更新される / Table updates via OnAssetAdded hook
+	UObject* CreatedAsset = AssetTools.CreateAssetWithDialog(
+		Sheet->TargetClass->GetName(), DefaultPath, Sheet->TargetClass, Factory, NAME_None, /*bCallConfigureProperties=*/ false);
+
+	if (!Sheet->bShowAll)
+	{
+		if (UDataAsset* CreatedDataAsset = Cast<UDataAsset>(CreatedAsset))
+		{
+			FScopedTransaction Transaction(LOCTEXT("AddCreatedAssetToSheet", "Add Created Asset to Sheet"));
+			if (AddAssetToManualAssets(Sheet, CreatedDataAsset))
+			{
+				RebuildTable();
+			}
+		}
+	}
+	// bShowAll=true の場合は OnAssetAdded フックで自動的にテーブル更新される
+	// With bShowAll=true, the table updates via the OnAssetAdded hook.
 }
 
 
@@ -325,8 +366,22 @@ void SDataAssetSheetEditor::DuplicateSelectedAsset()
 
 	// ダイアログ付きで複製 / Duplicate with dialog
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-	AssetTools.DuplicateAssetWithDialog(AssetName, PackagePath, OriginalAsset);
-	// OnAssetAddedフックで自動的にテーブル更新される / Table updates via OnAssetAdded hook
+	UObject* DuplicatedAsset = AssetTools.DuplicateAssetWithDialog(AssetName, PackagePath, OriginalAsset);
+
+	UDataAssetSheet* Sheet = DataAssetSheet.Get();
+	if (Sheet && !Sheet->bShowAll)
+	{
+		if (UDataAsset* DuplicatedDataAsset = Cast<UDataAsset>(DuplicatedAsset))
+		{
+			FScopedTransaction Transaction(LOCTEXT("AddDuplicatedAssetToSheet", "Add Duplicated Asset to Sheet"));
+			if (AddAssetToManualAssets(Sheet, DuplicatedDataAsset))
+			{
+				RebuildTable();
+			}
+		}
+	}
+	// bShowAll=true の場合は OnAssetAdded フックで自動的にテーブル更新される
+	// With bShowAll=true, the table updates via the OnAssetAdded hook.
 }
 
 
@@ -489,6 +544,7 @@ FReply SDataAssetSheetEditor::HandleDrop(const FGeometry& MyGeometry, const FDra
 			TSharedPtr<FDataAssetRowData> NewRowData = MakeShared<FDataAssetRowData>();
 			NewRowData->AssetPath = AssetPath;
 			NewRowData->AssetName = AssetData.AssetName.ToString();
+			NewRowData->AssetClass = AssetData.GetClass();
 
 			if (UObject* LoadedObject = AssetPath.ResolveObject())
 			{

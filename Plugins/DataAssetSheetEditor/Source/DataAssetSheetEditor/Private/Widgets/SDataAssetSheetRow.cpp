@@ -4,6 +4,7 @@
 #include "SObjectThumbnailCell.h"
 #include "DataAssetSheet.h"
 #include "DataAssetSheetModel.h"
+#include "DataAssetSheetEditorModule.h"
 #include "AssetThumbnail.h"
 #include "Editor.h"
 #include "GameplayTagContainer.h"
@@ -196,12 +197,13 @@ TSharedRef<SWidget> SDataAssetSheetRow::GenerateCellContent(const FName& ColumnI
 									TargetRows.Add(PinnedRow);
 								}
 
-								const FBoolProperty* BoolProp = CastField<FBoolProperty>(CapturedProp);
 								const bool bNewValue = (NewState == ECheckBoxState::Checked);
+								const FString NewValueString = bNewValue ? TEXT("True") : TEXT("False");
 
 								FScopedTransaction Transaction(
 									FText::Format(LOCTEXT("InlineEditBool", "Edit {0}"), FText::FromString(CapturedProp->GetName())));
 
+								bool bAnyCommitted = false;
 								for (const TSharedPtr<FDataAssetRowData>& TargetRow : TargetRows)
 								{
 									if (!TargetRow.IsValid() || !TargetRow->IsLoaded())
@@ -213,14 +215,22 @@ TSharedRef<SWidget> SDataAssetSheetRow::GenerateCellContent(const FName& ColumnI
 									{
 										continue;
 									}
-									TargetAsset->Modify();
-									void* ValuePtr = BoolProp->ContainerPtrToValuePtr<void>(TargetAsset);
-									BoolProp->SetPropertyValue(ValuePtr, bNewValue);
-									TargetAsset->MarkPackageDirty();
-									PinnedModel->RebuildRowCacheForProperty(TargetRow, CapturedProp);
+									FString FailureReason;
+									if (PinnedModel->SetPropertyValueFromString(TargetRow, CapturedProp, NewValueString, &FailureReason))
+									{
+										bAnyCommitted = true;
+									}
+									else
+									{
+										UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("Inline bool edit failed for %s.%s: %s"),
+											*TargetAsset->GetName(), *CapturedProp->GetName(), *FailureReason);
+									}
 								}
 
-								PinnedModel->OnInlineEditCommitted.Broadcast();
+								if (bAnyCommitted)
+								{
+									PinnedModel->OnInlineEditCommitted.Broadcast();
+								}
 							})
 					];
 			}
@@ -355,10 +365,17 @@ TSharedRef<SWidget> SDataAssetSheetRow::GenerateCellContent(const FName& ColumnI
 
 					// コンボボックス用のオプションリストを構築 / Build options list for combo box
 					TSharedPtr<TArray<TSharedPtr<FString>>> EnumOptions = MakeShared<TArray<TSharedPtr<FString>>>();
-					const int32 NumEnums = CapturedEnum->NumEnums() - 1; // exclude _MAX
-					for (int32 i = 0; i < NumEnums; ++i)
+					TSharedPtr<TArray<int64>> EnumValues = MakeShared<TArray<int64>>();
+					for (int32 i = 0; i < CapturedEnum->NumEnums(); ++i)
 					{
-						EnumOptions->Add(MakeShared<FString>(CapturedEnum->GetDisplayNameTextByValue(i).ToString()));
+						const FString NameByIndex = CapturedEnum->GetNameStringByIndex(i);
+						if (CapturedEnum->HasMetaData(TEXT("Hidden"), i) || NameByIndex.EndsWith(TEXT("_MAX")))
+						{
+							continue;
+						}
+
+						EnumOptions->Add(MakeShared<FString>(CapturedEnum->GetDisplayNameTextByIndex(i).ToString()));
+						EnumValues->Add(CapturedEnum->GetValueByIndex(i));
 					}
 
 					// 読み取り専用テキスト / Read-only display text
@@ -397,7 +414,7 @@ TSharedRef<SWidget> SDataAssetSheetRow::GenerateCellContent(const FName& ColumnI
 						{
 							return SNew(STextBlock).Text(FText::FromString(*InOption));
 						})
-						.OnSelectionChanged_Lambda([Self, WeakRowData, WeakModel, CapturedProp, CapturedEnum, CapturedColumnId, EnumOptions](TSharedPtr<FString> InSelection, ESelectInfo::Type SelectInfo)
+						.OnSelectionChanged_Lambda([Self, WeakRowData, WeakModel, CapturedProp, CapturedEnum, CapturedColumnId, EnumOptions, EnumValues](TSharedPtr<FString> InSelection, ESelectInfo::Type SelectInfo)
 						{
 							if (SelectInfo == ESelectInfo::Direct || !InSelection.IsValid())
 							{
@@ -418,7 +435,11 @@ TSharedRef<SWidget> SDataAssetSheetRow::GenerateCellContent(const FName& ColumnI
 								return;
 							}
 							// Enum値をExportText形式でコミット / Commit using ExportText-compatible format
-							int64 EnumValue = CapturedEnum->GetValueByIndex(SelectedIndex);
+							if (!EnumValues->IsValidIndex(SelectedIndex))
+							{
+								return;
+							}
+							int64 EnumValue = (*EnumValues)[SelectedIndex];
 							FString ValueStr = CapturedEnum->GetNameStringByValue(EnumValue);
 							Self->CommitPropertyEdit(CapturedProp, ValueStr);
 							Self->ExitEditMode();
@@ -647,6 +668,7 @@ void SDataAssetSheetRow::CommitPropertyEdit(FProperty* Prop, const FString& NewV
 	FScopedTransaction Transaction(
 		FText::Format(LOCTEXT("InlineEdit", "Edit {0}"), FText::FromString(Prop->GetName())));
 
+	bool bAnyCommitted = false;
 	for (const TSharedPtr<FDataAssetRowData>& TargetRow : TargetRows)
 	{
 		if (!TargetRow.IsValid() || !TargetRow->IsLoaded())
@@ -659,21 +681,21 @@ void SDataAssetSheetRow::CommitPropertyEdit(FProperty* Prop, const FString& NewV
 			continue;
 		}
 
-		TargetAsset->Modify();
-		void* ValuePtr = Prop->ContainerPtrToValuePtr<void>(TargetAsset);
-		if (FTextProperty* TextProp = CastField<FTextProperty>(Prop))
+		FString FailureReason;
+		if (Model->SetPropertyValueFromString(TargetRow, Prop, NewValue, &FailureReason))
 		{
-			TextProp->SetPropertyValue(ValuePtr, FText::FromString(NewValue));
+			bAnyCommitted = true;
+			continue;
 		}
-		else
-		{
-			Prop->ImportText_Direct(*NewValue, ValuePtr, TargetAsset, PPF_None);
-		}
-		TargetAsset->MarkPackageDirty();
-		Model->RebuildRowCacheForProperty(TargetRow, Prop);
+
+		UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("Inline edit failed for %s.%s value '%s': %s"),
+			*TargetAsset->GetName(), *Prop->GetName(), *NewValue, *FailureReason);
 	}
 
-	Model->OnInlineEditCommitted.Broadcast();
+	if (bAnyCommitted)
+	{
+		Model->OnInlineEditCommitted.Broadcast();
+	}
 }
 
 void SDataAssetSheetRow::EnterEditMode(FName ColumnId)
