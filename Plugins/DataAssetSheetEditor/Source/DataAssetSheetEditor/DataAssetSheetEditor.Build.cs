@@ -38,6 +38,7 @@ public class DataAssetSheetEditor : ModuleRules
 				"EditorFramework",
 				"ToolMenus",
 				"PropertyEditor",
+				"ClassViewer",
 				"AssetRegistry",
 				"ContentBrowser",
 				"DesktopPlatform",

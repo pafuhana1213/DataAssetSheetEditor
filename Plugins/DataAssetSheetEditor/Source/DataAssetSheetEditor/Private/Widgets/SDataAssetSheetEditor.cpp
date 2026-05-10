@@ -391,9 +391,9 @@ TSharedRef<SWidget> SDataAssetSheetEditor::GetDetailsWidget() const
 void SDataAssetSheetEditor::RebuildTable()
 {
 	UDataAssetSheet* Sheet = DataAssetSheet.Get();
-	if (!Sheet || !Sheet->TargetClass)
+	if (!Sheet || !Sheet->IsAllowedDataAssetClass(Sheet->TargetClass))
 	{
-		UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("DataAssetSheet or TargetClass is null"));
+		UE_LOG(LogDataAssetSheetEditor, Warning, TEXT("DataAssetSheet is null or TargetClass is unsupported"));
 		return;
 	}
 
@@ -403,7 +403,7 @@ void SDataAssetSheetEditor::RebuildTable()
 	Model->DiscoverAssets(TargetClass, Sheet->bShowAll, Sheet->ManualAssets, Sheet->RegisteredCollections);
 
 	// DisplayClassが設定されていればそのクラスのプロパティも列に表示 / Use DisplayClass for columns if set
-	UClass* ColumnClass = (Sheet->DisplayClass && Sheet->DisplayClass->IsChildOf(TargetClass))
+	UClass* ColumnClass = (Sheet->IsAllowedDataAssetClass(Sheet->DisplayClass) && Sheet->DisplayClass->IsChildOf(TargetClass))
 		? Sheet->DisplayClass.Get()
 		: TargetClass;
 	Model->BuildColumnList(ColumnClass);
@@ -1130,7 +1130,7 @@ void SDataAssetSheetEditor::UnregisterAssetRegistryEvents()
 bool SDataAssetSheetEditor::IsTargetAsset(const FAssetData& AssetData) const
 {
 	UDataAssetSheet* Sheet = DataAssetSheet.Get();
-	if (!Sheet || !Sheet->TargetClass)
+	if (!Sheet || !Sheet->IsAllowedDataAssetClass(Sheet->TargetClass))
 	{
 		return false;
 	}

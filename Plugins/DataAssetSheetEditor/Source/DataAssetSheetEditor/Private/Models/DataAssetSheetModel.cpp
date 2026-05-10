@@ -1,6 +1,7 @@
 // Copyright 2026 pafuhana1213. All Rights Reserved.
 
 #include "DataAssetSheetModel.h"
+#include "DataAssetSheet.h"
 #include "DataAssetSheetEditorModule.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "UObject/FieldIterator.h"
@@ -58,7 +59,7 @@ void FDataAssetSheetModel::DiscoverAssets(UClass* InTargetClass, bool bShowAll,
 	RowDataList.Empty();
 	LoadingState = EDataAssetSheetLoadingState::NotStarted;
 
-	if (!InTargetClass)
+	if (!UDataAssetSheet::IsSupportedDataAssetClass(InTargetClass))
 	{
 		return;
 	}
@@ -225,7 +226,7 @@ void FDataAssetSheetModel::BuildColumnList(UClass* InTargetClass)
 {
 	ColumnProperties.Empty();
 
-	if (!InTargetClass)
+	if (!UDataAssetSheet::IsSupportedDataAssetClass(InTargetClass))
 	{
 		return;
 	}

@@ -238,7 +238,7 @@ bool SDataAssetSheetEditor::HasSelectedLoadedAsset() const
 void SDataAssetSheetEditor::CreateNewAsset()
 {
 	UDataAssetSheet* Sheet = DataAssetSheet.Get();
-	if (!Sheet || !Sheet->TargetClass)
+	if (!Sheet || !Sheet->IsAllowedDataAssetClass(Sheet->TargetClass))
 	{
 		return;
 	}

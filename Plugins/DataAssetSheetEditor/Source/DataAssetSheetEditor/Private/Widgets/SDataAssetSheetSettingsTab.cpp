@@ -49,6 +49,14 @@ void SDataAssetSheetSettingsTab::OnPropertyChanged(const FPropertyChangedEvent& 
 		Sheet->MarkPackageDirty();
 	}
 
+	const FName ChangedPropertyName = PropertyChangedEvent.GetPropertyName();
+	if ((ChangedPropertyName == GET_MEMBER_NAME_CHECKED(UDataAssetSheet, bHideEngineDataAssetClasses)
+			|| ChangedPropertyName == GET_MEMBER_NAME_CHECKED(UDataAssetSheet, TargetClass))
+		&& SettingsDetailsView.IsValid())
+	{
+		SettingsDetailsView->ForceRefresh();
+	}
+
 	// テーブル再構築をトリガー / Trigger table rebuild
 	OnSettingsChanged.ExecuteIfBound();
 }

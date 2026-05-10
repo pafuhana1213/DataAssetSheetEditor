@@ -11,18 +11,24 @@
 class FDataAssetClassFilter : public IClassViewerFilter
 {
 public:
+	explicit FDataAssetClassFilter(bool bInHideEngineClasses)
+		: bHideEngineClasses(bInHideEngineClasses)
+	{
+	}
+
 	virtual bool IsClassAllowed(const FClassViewerInitializationOptions& InInitOptions, const UClass* InClass, TSharedRef<FClassViewerFilterFuncs> InFilterFuncs) override
 	{
-		return InClass->IsChildOf(UDataAsset::StaticClass())
-			&& InClass != UDataAsset::StaticClass()
-			&& !InClass->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists);
+		return UDataAssetSheet::IsSupportedDataAssetClass(InClass, bHideEngineClasses);
 	}
 
 	virtual bool IsUnloadedClassAllowed(const FClassViewerInitializationOptions& InInitOptions, const TSharedRef<const IUnloadedBlueprintData> InUnloadedClassData, TSharedRef<FClassViewerFilterFuncs> InFilterFuncs) override
 	{
 		return InUnloadedClassData->IsChildOf(UDataAsset::StaticClass())
-			&& !InUnloadedClassData->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists);
+			&& !InUnloadedClassData->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists | CLASS_Hidden | CLASS_HideDropDown | CLASS_Transient);
 	}
+
+private:
+	bool bHideEngineClasses = true;
 };
 
 UDataAssetSheetFactory::UDataAssetSheetFactory()
@@ -39,7 +45,7 @@ bool UDataAssetSheetFactory::ConfigureProperties()
 	// クラス選択ダイアログの設定 / Configure class picker dialog
 	FClassViewerInitializationOptions Options;
 	Options.Mode = EClassViewerMode::ClassPicker;
-	Options.ClassFilters.Add(MakeShared<FDataAssetClassFilter>());
+	Options.ClassFilters.Add(MakeShared<FDataAssetClassFilter>(GetDefault<UDataAssetSheet>()->bHideEngineDataAssetClasses));
 
 	// ダイアログ表示 / Show the picker dialog
 	UClass* ChosenClass = nullptr;
