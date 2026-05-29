@@ -140,15 +140,6 @@ void FDataAssetSheetEditorToolkit::FillToolbar(FToolBarBuilder& ToolbarBuilder)
 			LOCTEXT("NewAssetText", "New Asset"),
 			LOCTEXT("NewAssetTooltip", "Create a new DataAsset of the target class"),
 			FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Plus"));
-
-		ToolbarBuilder.AddToolBarButton(
-			FUIAction(
-				FExecuteAction::CreateSP(EditorWidget.ToSharedRef(), &SDataAssetSheetEditor::SaveAllModifiedAssets),
-				FCanExecuteAction::CreateSP(EditorWidget.ToSharedRef(), &SDataAssetSheetEditor::HasModifiedAssets)),
-			NAME_None,
-			LOCTEXT("SaveModifiedText", "Save"),
-			LOCTEXT("SaveModifiedTooltip", "Save all modified assets"),
-			FSlateIcon(FAppStyle::GetAppStyleSetName(), "AssetEditor.SaveAsset"));
 	}
 	ToolbarBuilder.EndSection();
 
@@ -264,6 +255,18 @@ void FDataAssetSheetEditorToolkit::UnregisterTabSpawners(const TSharedRef<FTabMa
 	InTabManager->UnregisterTabSpawner(TableTabId);
 	InTabManager->UnregisterTabSpawner(DetailsTabId);
 	InTabManager->UnregisterTabSpawner(SettingsTabId);
+}
+
+void FDataAssetSheetEditorToolkit::SaveAsset_Execute()
+{
+	// シート本体（UDataAssetSheet）を標準フローで保存 / Save the sheet asset itself via the standard flow
+	FAssetEditorToolkit::SaveAsset_Execute();
+
+	// シートに登録された個々のDataAssetの変更も併せて保存 / Also save modified registered DataAssets
+	if (EditorWidget.IsValid())
+	{
+		EditorWidget->SaveAllModifiedAssets();
+	}
 }
 
 TSharedRef<SDockTab> FDataAssetSheetEditorToolkit::SpawnTableTab(const FSpawnTabArgs& Args)

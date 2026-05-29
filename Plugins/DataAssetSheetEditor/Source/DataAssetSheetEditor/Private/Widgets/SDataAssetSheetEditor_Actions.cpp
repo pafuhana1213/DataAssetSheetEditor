@@ -412,28 +412,6 @@ void SDataAssetSheetEditor::SaveAllModifiedAssets()
 }
 
 
-bool SDataAssetSheetEditor::HasModifiedAssets() const
-{
-	for (const TSharedPtr<FDataAssetRowData>& RowData : Model->GetRowDataList())
-	{
-		if (RowData.IsValid() && RowData->IsLoaded())
-		{
-			UDataAsset* Asset = RowData->Asset.Get();
-			if (!Asset)
-			{
-				continue;
-			}
-			UPackage* Package = Asset->GetOutermost();
-			if (Package && Package->IsDirty())
-			{
-				return true;
-			}
-		}
-	}
-	return false;
-}
-
-
 void SDataAssetSheetEditor::FindReferencesForSelectedAsset()
 {
 	TArray<TSharedPtr<FDataAssetRowData>> SelectedItems = AssetListView->GetSelectedItems();

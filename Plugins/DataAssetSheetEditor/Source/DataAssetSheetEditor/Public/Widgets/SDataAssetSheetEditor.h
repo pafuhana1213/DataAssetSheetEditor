@@ -52,7 +52,6 @@ public:
 	// ツールバーから呼ばれるアクション / Actions called from toolkit toolbar
 	void CreateNewAsset();
 	void SaveAllModifiedAssets();
-	bool HasModifiedAssets() const;
 
 	// 全列を内容にフィット (非表示列も含む) / Auto-fit all columns including hidden ones
 	void AutoFitAllColumnWidths();

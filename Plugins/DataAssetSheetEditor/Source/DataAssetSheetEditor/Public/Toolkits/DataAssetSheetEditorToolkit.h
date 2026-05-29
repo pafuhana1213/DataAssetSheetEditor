@@ -28,6 +28,9 @@ public:
 	virtual void RegisterTabSpawners(const TSharedRef<FTabManager>& InTabManager) override;
 	virtual void UnregisterTabSpawners(const TSharedRef<FTabManager>& InTabManager) override;
 
+	// Save: シート本体に加えて登録済みDataAssetも併せて保存する / Save the sheet asset and all modified registered DataAssets
+	virtual void SaveAsset_Execute() override;
+
 private:
 	// ツールバー拡張 / Extend the toolbar with custom buttons
 	void ExtendToolbar(TSharedPtr<FExtender> Extender);
