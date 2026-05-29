@@ -6,6 +6,8 @@
 #include "DataAssetSheetModel.h"
 #include "DataAssetSheetEditorModule.h"
 #include "AssetThumbnail.h"
+#include "ContentBrowserModule.h"
+#include "IContentBrowserSingleton.h"
 #include "Editor.h"
 #include "GameplayTagContainer.h"
 #include "Math/ColorList.h"
@@ -14,7 +16,10 @@
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "UObject/Package.h"
 #include "UObject/UnrealType.h"
+#include "Widgets/SBoxPanel.h"
 #include "Widgets/Colors/SColorBlock.h"
+#include "Widgets/Images/SImage.h"
+#include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SComboBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
@@ -79,29 +84,60 @@ TSharedRef<SWidget> SDataAssetSheetRow::GenerateCellContent(const FName& ColumnI
 		return SNew(SBox)
 			.Padding(FMargin(4.0f, 2.0f))
 			[
-				SNew(SHyperlink)
-					.Text_Lambda([WeakRowData]() -> FText
-					{
-						TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
-						if (!PinnedRow.IsValid())
-						{
-							return FText::GetEmpty();
-						}
-						FString DisplayName = PinnedRow->AssetName;
-						if (PinnedRow->IsLoaded())
-						{
-							if (UDataAsset* Asset = PinnedRow->Asset.Get())
+				SNew(SHorizontalBox)
+
+				// アセット名ハイパーリンク（クリックでエディタを開く）/ Asset name hyperlink (opens editor on click)
+				+ SHorizontalBox::Slot()
+					.FillWidth(1.0f)
+					.VAlign(VAlign_Center)
+					[
+						SNew(SHyperlink)
+							.Text_Lambda([WeakRowData]() -> FText
 							{
-								UPackage* Package = Asset->GetOutermost();
-								if (Package && Package->IsDirty())
+								TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
+								if (!PinnedRow.IsValid())
 								{
-									DisplayName = TEXT("* ") + DisplayName;
+									return FText::GetEmpty();
 								}
-							}
-						}
-						return FText::FromString(DisplayName);
-					})
-					.OnNavigate(this, &SDataAssetSheetRow::OnAssetNameClicked)
+								FString DisplayName = PinnedRow->AssetName;
+								if (PinnedRow->IsLoaded())
+								{
+									if (UDataAsset* Asset = PinnedRow->Asset.Get())
+									{
+										UPackage* Package = Asset->GetOutermost();
+										if (Package && Package->IsDirty())
+										{
+											DisplayName = TEXT("* ") + DisplayName;
+										}
+									}
+								}
+								return FText::FromString(DisplayName);
+							})
+							.OnNavigate(this, &SDataAssetSheetRow::OnAssetNameClicked)
+					]
+
+				// コンテンツブラウザで表示ボタン / Find in Content Browser button
+				+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					.Padding(FMargin(4.0f, 0.0f, 0.0f, 0.0f))
+					[
+						SNew(SButton)
+							.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+							.ContentPadding(FMargin(2.0f, 0.0f))
+							.ToolTipText(LOCTEXT("FindInContentBrowserRowTooltip", "コンテンツブラウザで表示 / Find in Content Browser"))
+							.IsEnabled_Lambda([WeakRowData]() -> bool
+							{
+								TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
+								return PinnedRow.IsValid() && PinnedRow->IsLoaded();
+							})
+							.OnClicked(this, &SDataAssetSheetRow::OnBrowseToAssetClicked)
+							[
+								SNew(SImage)
+									.Image(FAppStyle::GetBrush("SystemWideCommands.FindInContentBrowser"))
+									.ColorAndOpacity(FSlateColor::UseForeground())
+							]
+					]
 			];
 	}
 
@@ -632,6 +668,24 @@ void SDataAssetSheetRow::OnAssetNameClicked()
 	{
 		Subsystem->OpenEditorForAsset(Asset);
 	}
+}
+
+// コンテンツブラウザでこの行のアセットを表示 / Sync to this row's asset in the Content Browser
+FReply SDataAssetSheetRow::OnBrowseToAssetClicked()
+{
+	if (!RowData.IsValid() || !RowData->IsLoaded())
+	{
+		return FReply::Handled();
+	}
+	if (UDataAsset* Asset = RowData->Asset.Get())
+	{
+		TArray<FAssetData> AssetDatas;
+		AssetDatas.Add(FAssetData(Asset));
+		FContentBrowserModule& ContentBrowserModule =
+			FModuleManager::LoadModuleChecked<FContentBrowserModule>("ContentBrowser");
+		ContentBrowserModule.Get().SyncBrowserToAssets(AssetDatas);
+	}
+	return FReply::Handled();
 }
 
 void SDataAssetSheetRow::CommitPropertyEdit(FProperty* Prop, const FString& NewValue)

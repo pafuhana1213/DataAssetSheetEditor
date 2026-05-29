@@ -43,6 +43,9 @@ private:
 	TSharedRef<SWidget> GenerateCellContent(const FName& ColumnId);
 	void OnAssetNameClicked();
 
+	// コンテンツブラウザでこの行のアセットを表示 / Sync to this row's asset in the Content Browser
+	FReply OnBrowseToAssetClicked();
+
 	// プロパティ値をコミット / Commit property value from inline edit
 	void CommitPropertyEdit(FProperty* Prop, const FString& NewValue);
 
