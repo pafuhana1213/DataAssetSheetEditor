@@ -318,6 +318,58 @@ void SDataAssetSheetEditor::RemoveSelectedFromManualAssets()
 }
 
 
+void SDataAssetSheetEditor::ReplaceRowAsset(const FSoftObjectPath& OldPath, const FAssetData& NewAsset)
+{
+	UDataAssetSheet* Sheet = DataAssetSheet.Get();
+	if (!Sheet || Sheet->bShowAll)
+	{
+		return;
+	}
+
+	// 無効（None/paste-None）なら何もしない（クリア無効方針）/ Ignore invalid selections (clear is disabled)
+	if (!NewAsset.IsValid())
+	{
+		return;
+	}
+
+	const FSoftObjectPath NewPath = NewAsset.GetSoftObjectPath();
+	if (NewPath == OldPath)
+	{
+		return;
+	}
+
+	// 既に登録済みなら何もしない / Skip if the picked asset is already in the sheet
+	const bool bAlreadyRegistered = Sheet->ManualAssets.ContainsByPredicate(
+		[&NewPath](const TSoftObjectPtr<UDataAsset>& Existing)
+		{
+			return Existing.ToSoftObjectPath() == NewPath;
+		});
+	if (bAlreadyRegistered)
+	{
+		return;
+	}
+
+	// ManualAssets内の該当エントリを差し替え（見つかった場合のみ）/ Replace the matching ManualAssets entry only
+	const int32 Index = Sheet->ManualAssets.IndexOfByPredicate(
+		[&OldPath](const TSoftObjectPtr<UDataAsset>& Existing)
+		{
+			return Existing.ToSoftObjectPath() == OldPath;
+		});
+	if (Index == INDEX_NONE)
+	{
+		// コレクション由来等、ManualAssetsに無い行は差し替え対象外 / Not a manual-asset row: nothing to swap
+		return;
+	}
+
+	FScopedTransaction Transaction(LOCTEXT("ReplaceRowAssetTransaction", "Replace Sheet Asset"));
+	Sheet->Modify();
+	Sheet->ManualAssets[Index] = TSoftObjectPtr<UDataAsset>(NewPath);
+	Sheet->MarkPackageDirty();
+
+	RebuildTable();
+}
+
+
 bool SDataAssetSheetEditor::CanRemoveSelectedFromManualAssets() const
 {
 	TArray<TSharedPtr<FDataAssetRowData>> SelectedItems = AssetListView->GetSelectedItems();

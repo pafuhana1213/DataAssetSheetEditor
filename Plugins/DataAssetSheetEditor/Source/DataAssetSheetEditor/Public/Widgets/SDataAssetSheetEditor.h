@@ -141,6 +141,9 @@ private:
 	void RemoveSelectedFromManualAssets();
 	bool CanRemoveSelectedFromManualAssets() const;
 
+	// 行のアセットを差し替え（ピッカーからの選択）/ Replace a row's asset (picked from the cell picker)
+	void ReplaceRowAsset(const FSoftObjectPath& OldPath, const FAssetData& NewAsset);
+
 	// アセット複製 / Duplicate selected asset
 	void DuplicateSelectedAsset();
 

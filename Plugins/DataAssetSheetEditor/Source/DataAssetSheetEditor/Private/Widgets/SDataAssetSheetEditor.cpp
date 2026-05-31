@@ -737,7 +737,9 @@ TSharedRef<ITableRow> SDataAssetSheetEditor::OnGenerateRow(TSharedPtr<FDataAsset
 {
 	const int32 Index = Model->GetFilteredRowDataList().IndexOfByKey(InRowData);
 	return SNew(SDataAssetSheetRow, OwnerTable, InRowData, Model, AssetListView, ThumbnailPool)
-		.IndexInList(Index);
+		.IndexInList(Index)
+		.Sheet(DataAssetSheet)
+		.OnReplaceRowAsset(FOnReplaceRowAsset::CreateSP(this, &SDataAssetSheetEditor::ReplaceRowAsset));
 }
 
 void SDataAssetSheetEditor::OnSelectionChanged(TSharedPtr<FDataAssetRowData> InRowData, ESelectInfo::Type SelectInfo)

@@ -11,6 +11,7 @@
 #include "Editor.h"
 #include "GameplayTagContainer.h"
 #include "Math/ColorList.h"
+#include "PropertyCustomizationHelpers.h"
 #include "ScopedTransaction.h"
 #include "Styling/AppStyle.h"
 #include "Subsystems/AssetEditorSubsystem.h"
@@ -41,6 +42,8 @@ void SDataAssetSheetRow::Construct(const FArguments& InArgs, const TSharedRef<ST
 	IndexInList = InArgs._IndexInList;
 	OwnerListView = InListView;
 	ThumbnailPool = InThumbnailPool;
+	WeakSheet = InArgs._Sheet;
+	OnReplaceRowAsset = InArgs._OnReplaceRowAsset;
 	SMultiColumnTableRow::Construct(FSuperRowType::FArguments(), InOwnerTable);
 }
 
@@ -79,66 +82,7 @@ TSharedRef<SWidget> SDataAssetSheetRow::GenerateCellContent(const FName& ColumnI
 	// アセット名列（未保存時は * 表示）/ Asset name column with unsaved indicator
 	if (ColumnId == "AssetName")
 	{
-		TWeakPtr<FDataAssetRowData> WeakRowData = RowData;
-
-		return SNew(SBox)
-			.Padding(FMargin(4.0f, 2.0f))
-			[
-				SNew(SHorizontalBox)
-
-				// アセット名ハイパーリンク（クリックでエディタを開く）/ Asset name hyperlink (opens editor on click)
-				+ SHorizontalBox::Slot()
-					.FillWidth(1.0f)
-					.VAlign(VAlign_Center)
-					[
-						SNew(SHyperlink)
-							.Text_Lambda([WeakRowData]() -> FText
-							{
-								TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
-								if (!PinnedRow.IsValid())
-								{
-									return FText::GetEmpty();
-								}
-								FString DisplayName = PinnedRow->AssetName;
-								if (PinnedRow->IsLoaded())
-								{
-									if (UDataAsset* Asset = PinnedRow->Asset.Get())
-									{
-										UPackage* Package = Asset->GetOutermost();
-										if (Package && Package->IsDirty())
-										{
-											DisplayName = TEXT("* ") + DisplayName;
-										}
-									}
-								}
-								return FText::FromString(DisplayName);
-							})
-							.OnNavigate(this, &SDataAssetSheetRow::OnAssetNameClicked)
-					]
-
-				// コンテンツブラウザで表示ボタン / Find in Content Browser button
-				+ SHorizontalBox::Slot()
-					.AutoWidth()
-					.VAlign(VAlign_Center)
-					.Padding(FMargin(4.0f, 0.0f, 0.0f, 0.0f))
-					[
-						SNew(SButton)
-							.ButtonStyle(FAppStyle::Get(), "SimpleButton")
-							.ContentPadding(FMargin(2.0f, 0.0f))
-							.ToolTipText(LOCTEXT("FindInContentBrowserRowTooltip", "コンテンツブラウザで表示 / Find in Content Browser"))
-							.IsEnabled_Lambda([WeakRowData]() -> bool
-							{
-								TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
-								return PinnedRow.IsValid() && PinnedRow->IsLoaded();
-							})
-							.OnClicked(this, &SDataAssetSheetRow::OnBrowseToAssetClicked)
-							[
-								SNew(SImage)
-									.Image(FAppStyle::GetBrush("SystemWideCommands.FindInContentBrowser"))
-									.ColorAndOpacity(FSlateColor::UseForeground())
-							]
-					]
-			];
+		return GenerateAssetNameCell();
 	}
 
 	// プロパティ列 / Property value column
@@ -652,22 +596,199 @@ TSharedRef<SWidget> SDataAssetSheetRow::GenerateCellContent(const FName& ColumnI
 	return SNew(SBox);
 }
 
-// アセット名クリック → アセットエディタを開く / Open asset editor on click
-void SDataAssetSheetRow::OnAssetNameClicked()
+// この行がピッカーで編集可能か（ManualAssets由来かつ非bShowAll）
+// Whether this row's asset can be swapped via the picker (manual-asset rows only)
+bool SDataAssetSheetRow::IsRowEditable() const
 {
-	if (!RowData.IsValid() || !RowData->IsLoaded())
+	UDataAssetSheet* Sheet = WeakSheet.Get();
+	if (!Sheet || Sheet->bShowAll || !RowData.IsValid())
 	{
-		return;
+		return false;
 	}
-	UDataAsset* Asset = RowData->Asset.Get();
-	if (!Asset)
+	const FSoftObjectPath& Path = RowData->AssetPath;
+	return Sheet->ManualAssets.ContainsByPredicate(
+		[&Path](const TSoftObjectPtr<UDataAsset>& Existing)
+		{
+			return Existing.ToSoftObjectPath() == Path;
+		});
+}
+
+// アセット名セルを構築 / Build the AssetName cell
+TSharedRef<SWidget> SDataAssetSheetRow::GenerateAssetNameCell()
+{
+	TWeakPtr<FDataAssetRowData> WeakRowData = RowData;
+
+	// 未保存マーク（* ）/ Dirty indicator widget (kept separately since the picker only shows the name)
+	auto MakeDirtyMark = [WeakRowData]() -> TSharedRef<SWidget>
 	{
-		return;
-	}
-	if (UAssetEditorSubsystem* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>() : nullptr)
+		return SNew(STextBlock)
+			.Text_Lambda([WeakRowData]() -> FText
+			{
+				TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
+				if (PinnedRow.IsValid() && PinnedRow->IsLoaded())
+				{
+					if (UDataAsset* Asset = PinnedRow->Asset.Get())
+					{
+						UPackage* Package = Asset->GetOutermost();
+						if (Package && Package->IsDirty())
+						{
+							return LOCTEXT("DirtyMark", "*");
+						}
+					}
+				}
+				return FText::GetEmpty();
+			});
+	};
+
+	// 編集可: ChooserTable風アセットピッカー / Editable: ChooserTable-style asset picker
+	if (IsRowEditable())
 	{
-		Subsystem->OpenEditorForAsset(Asset);
+		UDataAssetSheet* Sheet = WeakSheet.Get();
+		TWeakObjectPtr<UDataAssetSheet> SheetWeak = WeakSheet;
+		TWeakPtr<FDataAssetSheetModel> ModelWeak = Model;
+		FOnReplaceRowAsset ReplaceDelegate = OnReplaceRowAsset;
+
+		return SNew(SBox)
+			.Padding(FMargin(4.0f, 2.0f))
+			[
+				SNew(SHorizontalBox)
+
+				// 未保存マーク / Dirty indicator
+				+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					.Padding(FMargin(0.0f, 0.0f, 2.0f, 0.0f))
+					[
+						MakeDirtyMark()
+					]
+
+				// アセットピッカー / Asset picker (non-property mode)
+				+ SHorizontalBox::Slot()
+					.FillWidth(1.0f)
+					.VAlign(VAlign_Center)
+					[
+						SNew(SObjectPropertyEntryBox)
+							.AllowedClass(Sheet ? Sheet->TargetClass.Get() : UDataAsset::StaticClass())
+							.DisplayThumbnail(false)
+							.DisplayUseSelected(true)
+							.DisplayBrowse(true)
+							.EnableContentPicker(true)
+							.AllowClear(false)
+							.ObjectPath_Lambda([WeakRowData]() -> FString
+							{
+								TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
+								return PinnedRow.IsValid() ? PinnedRow->AssetPath.ToString() : FString();
+							})
+							.OnShouldFilterAsset_Lambda([WeakRowData, SheetWeak, ModelWeak](const FAssetData& AssetData) -> bool
+							{
+								// true を返すと候補から除外 / Returning true filters the asset OUT
+								UDataAssetSheet* PinnedSheet = SheetWeak.Get();
+								if (!PinnedSheet)
+								{
+									return true;
+								}
+								// 許可クラス（Engineクラス除外等）/ Allowed-class check
+								if (!PinnedSheet->IsAllowedDataAssetClass(AssetData.GetClass()))
+								{
+									return true;
+								}
+								// 自分の行の現在値は残す / Keep this row's current value selectable
+								const FSoftObjectPath Path = AssetData.GetSoftObjectPath();
+								TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
+								if (PinnedRow.IsValid() && Path == PinnedRow->AssetPath)
+								{
+									return false;
+								}
+								// 既に表示中（ManualAssets + Collections等）のアセットは除外 / Exclude assets already shown in the sheet
+								TSharedPtr<FDataAssetSheetModel> PinnedModel = ModelWeak.Pin();
+								if (PinnedModel.IsValid())
+								{
+									for (const TSharedPtr<FDataAssetRowData>& Row : PinnedModel->GetRowDataList())
+									{
+										if (Row.IsValid() && Row->AssetPath == Path)
+										{
+											return true;
+										}
+									}
+								}
+								return false;
+							})
+							.OnObjectChanged_Lambda([WeakRowData, ReplaceDelegate](const FAssetData& NewAssetData)
+							{
+								// paste等でNoneが来た場合の保険 / Guard against invalid (e.g. pasted None) selections
+								if (!NewAssetData.IsValid())
+								{
+									return;
+								}
+								TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
+								if (PinnedRow.IsValid() && ReplaceDelegate.IsBound())
+								{
+									ReplaceDelegate.Execute(PinnedRow->AssetPath, NewAssetData);
+								}
+							})
+					]
+
+			];
 	}
+
+	// 読み取り専用: 名前 + ブラウズ / Read-only: name + browse (bShowAll or collection-backed rows)
+	return SNew(SBox)
+		.Padding(FMargin(4.0f, 2.0f))
+		[
+			SNew(SHorizontalBox)
+
+			// アセット名（未保存時は * 付き）/ Asset name with unsaved indicator
+			+ SHorizontalBox::Slot()
+				.FillWidth(1.0f)
+				.VAlign(VAlign_Center)
+				[
+					SNew(STextBlock)
+						.Text_Lambda([WeakRowData]() -> FText
+						{
+							TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
+							if (!PinnedRow.IsValid())
+							{
+								return FText::GetEmpty();
+							}
+							FString DisplayName = PinnedRow->AssetName;
+							if (PinnedRow->IsLoaded())
+							{
+								if (UDataAsset* Asset = PinnedRow->Asset.Get())
+								{
+									UPackage* Package = Asset->GetOutermost();
+									if (Package && Package->IsDirty())
+									{
+										DisplayName = TEXT("* ") + DisplayName;
+									}
+								}
+							}
+							return FText::FromString(DisplayName);
+						})
+				]
+
+			// コンテンツブラウザで表示ボタン / Find in Content Browser button
+			+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				.Padding(FMargin(4.0f, 0.0f, 0.0f, 0.0f))
+				[
+					SNew(SButton)
+						.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+						.ContentPadding(FMargin(2.0f, 0.0f))
+						.ToolTipText(LOCTEXT("FindInContentBrowserRowTooltip", "コンテンツブラウザで表示 / Find in Content Browser"))
+						.IsEnabled_Lambda([WeakRowData]() -> bool
+						{
+							TSharedPtr<FDataAssetRowData> PinnedRow = WeakRowData.Pin();
+							return PinnedRow.IsValid() && PinnedRow->IsLoaded();
+						})
+						.OnClicked(this, &SDataAssetSheetRow::OnBrowseToAssetClicked)
+						[
+							SNew(SImage)
+								.Image(FAppStyle::GetBrush("SystemWideCommands.FindInContentBrowser"))
+								.ColorAndOpacity(FSlateColor::UseForeground())
+						]
+				]
+		];
 }
 
 // コンテンツブラウザでこの行のアセットを表示 / Sync to this row's asset in the Content Browser
