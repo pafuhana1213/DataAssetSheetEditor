@@ -82,7 +82,19 @@ void FDataAssetSheetModel::DiscoverAssets(UClass* InTargetClass, bool bShowAll,
 	for (const TSoftObjectPtr<UDataAsset>& SoftPtr : ManualAssets)
 	{
 		FSoftObjectPath Path = SoftPtr.ToSoftObjectPath();
-		if (Path.IsNull() || AddedPaths.Contains(Path))
+		if (Path.IsNull())
+		{
+			// 空行（アセット未割り当て）。重複排除せず、各エントリを1行として表示する
+			// Empty row (no asset assigned). Not deduped, each entry becomes its own row.
+			TSharedPtr<FDataAssetRowData> EmptyRow = MakeShared<FDataAssetRowData>();
+			EmptyRow->AssetPath = FSoftObjectPath();
+			EmptyRow->AssetName.Reset();
+			EmptyRow->AssetClass = InTargetClass;
+			RowDataList.Add(EmptyRow);
+			continue;
+		}
+
+		if (AddedPaths.Contains(Path))
 		{
 			continue;
 		}
@@ -154,11 +166,24 @@ void FDataAssetSheetModel::RequestAsyncLoad(FOnAssetsLoaded OnCompleted)
 	CancelLoading();
 	LoadingState = EDataAssetSheetLoadingState::Loading;
 
-	// ロード対象パスを収集 / Collect paths to load
+	// ロード対象パスを収集（空行はアセット未割り当てなのでスキップ）/ Collect paths to load (skip empty rows: no asset assigned)
 	TArray<FSoftObjectPath> PathsToLoad;
 	for (const TSharedPtr<FDataAssetRowData>& RowData : RowDataList)
 	{
+		if (RowData->AssetPath.IsNull())
+		{
+			continue;
+		}
 		PathsToLoad.Add(RowData->AssetPath);
+	}
+
+	// ロード対象が無い（全行が空行）場合は即完了 / Nothing to load (all rows empty): complete immediately
+	if (PathsToLoad.IsEmpty())
+	{
+		RebuildAllRowCaches();
+		LoadingState = EDataAssetSheetLoadingState::Loaded;
+		OnCompleted.ExecuteIfBound();
+		return;
 	}
 
 	// 非同期ロード開始 / Start async load
@@ -170,6 +195,12 @@ void FDataAssetSheetModel::RequestAsyncLoad(FOnAssetsLoaded OnCompleted)
 			int32 FailedCount = 0;
 			for (TSharedPtr<FDataAssetRowData>& RowData : RowDataList)
 			{
+				// 空行（アセット未割り当て）はロード対象外なので失敗扱いしない / Empty rows have no asset; not a load failure
+				if (RowData->AssetPath.IsNull())
+				{
+					continue;
+				}
+
 				UObject* LoadedObject = RowData->AssetPath.ResolveObject();
 				if (UDataAsset* DataAsset = Cast<UDataAsset>(LoadedObject))
 				{
@@ -509,6 +540,18 @@ void FDataAssetSheetModel::SortByColumn(const FName& ColumnId, EColumnSortMode::
 	FilteredRowDataList.Sort([ColumnId, InSortMode, SortProp, bIsNumeric, SortPropName](
 		const TSharedPtr<FDataAssetRowData>& A, const TSharedPtr<FDataAssetRowData>& B)
 	{
+		// 空行（アセット未割り当て）はソート方向に関わらず常に末尾へ / Keep empty rows at the bottom regardless of sort direction
+		const bool bAEmpty = A->AssetPath.IsNull();
+		const bool bBEmpty = B->AssetPath.IsNull();
+		if (bAEmpty != bBEmpty)
+		{
+			return !bAEmpty;
+		}
+		if (bAEmpty && bBEmpty)
+		{
+			return false;
+		}
+
 		if (ColumnId == "AssetName")
 		{
 			int32 Result = A->AssetName.Compare(B->AssetName, ESearchCase::IgnoreCase);
