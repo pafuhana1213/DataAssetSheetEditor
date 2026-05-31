@@ -106,12 +106,30 @@ void SDataAssetSheetEditor::BindCommands(const TSharedRef<FUICommandList>& InCom
 
 TSharedPtr<SWidget> SDataAssetSheetEditor::OnConstructContextMenu()
 {
-	if (!HasSelectedLoadedAsset())
-	{
-		return nullptr;
-	}
+	// Add Row は選択不要なので、無選択でもメニューを出す。選択依存の項目は選択がある時のみ追加する。
+	// Add Row needs no selection, so show the menu even with none. Selection-dependent entries are added only when there is a selection.
+	const bool bHasSelection = HasSelectedLoadedAsset();
 
 	FMenuBuilder MenuBuilder(true, CommandList);
+
+	MenuBuilder.BeginSection("RowOperations", LOCTEXT("RowOperationsSection", "Rows"));
+	{
+		MenuBuilder.AddMenuEntry(
+			LOCTEXT("AddRow", "Add Row"),
+			LOCTEXT("AddRowTooltip", "Add an empty row; assign its asset with the picker"),
+			FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.PlusCircle"),
+			FUIAction(
+				FExecuteAction::CreateSP(this, &SDataAssetSheetEditor::AddEmptyRow),
+				FCanExecuteAction::CreateSP(this, &SDataAssetSheetEditor::CanAddEmptyRow)
+			)
+		);
+	}
+	MenuBuilder.EndSection();
+
+	if (!bHasSelection)
+	{
+		return MenuBuilder.MakeWidget();
+	}
 
 	MenuBuilder.BeginSection("AssetActions", LOCTEXT("AssetActionsSection", "Asset Actions"));
 	{
@@ -367,6 +385,31 @@ void SDataAssetSheetEditor::ReplaceRowAsset(const FSoftObjectPath& OldPath, cons
 	Sheet->MarkPackageDirty();
 
 	RebuildTable();
+}
+
+
+void SDataAssetSheetEditor::AddEmptyRow()
+{
+	UDataAssetSheet* Sheet = DataAssetSheet.Get();
+	if (!Sheet || Sheet->bShowAll)
+	{
+		return;
+	}
+
+	// 空エントリを末尾に追加（後からピッカーでアセットを割り当て）/ Append an empty entry; assign later via the picker
+	FScopedTransaction Transaction(LOCTEXT("AddEmptyRowTransaction", "Add Row"));
+	Sheet->Modify();
+	Sheet->ManualAssets.Add(TSoftObjectPtr<UDataAsset>());
+	Sheet->MarkPackageDirty();
+
+	RebuildTable();
+}
+
+
+bool SDataAssetSheetEditor::CanAddEmptyRow() const
+{
+	UDataAssetSheet* Sheet = DataAssetSheet.Get();
+	return Sheet && !Sheet->bShowAll;
 }
 
 

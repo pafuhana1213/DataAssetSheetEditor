@@ -140,6 +140,15 @@ void FDataAssetSheetEditorToolkit::FillToolbar(FToolBarBuilder& ToolbarBuilder)
 			LOCTEXT("NewAssetText", "New Asset"),
 			LOCTEXT("NewAssetTooltip", "Create a new DataAsset of the target class"),
 			FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Plus"));
+
+		ToolbarBuilder.AddToolBarButton(
+			FUIAction(
+				FExecuteAction::CreateSP(EditorWidget.ToSharedRef(), &SDataAssetSheetEditor::AddEmptyRow),
+				FCanExecuteAction::CreateSP(EditorWidget.ToSharedRef(), &SDataAssetSheetEditor::CanAddEmptyRow)),
+			NAME_None,
+			LOCTEXT("AddRowText", "Add Row"),
+			LOCTEXT("AddRowTooltip", "Add an empty row; assign its asset with the picker"),
+			FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.PlusCircle"));
 	}
 	ToolbarBuilder.EndSection();
 

@@ -53,6 +53,10 @@ public:
 	void CreateNewAsset();
 	void SaveAllModifiedAssets();
 
+	// 空行を追加（後からピッカーでアセットを割り当て）/ Add an empty row; assign its asset later via the picker
+	void AddEmptyRow();
+	bool CanAddEmptyRow() const;
+
 	// 全列を内容にフィット (非表示列も含む) / Auto-fit all columns including hidden ones
 	void AutoFitAllColumnWidths();
 
