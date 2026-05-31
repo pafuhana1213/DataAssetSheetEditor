@@ -169,6 +169,25 @@ void FDataAssetSheetEditorToolkit::FillToolbar(FToolBarBuilder& ToolbarBuilder)
 			FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Refresh"));
 	}
 	ToolbarBuilder.EndSection();
+
+	ToolbarBuilder.BeginSection("DataAssetSheetSettings");
+	{
+		ToolbarBuilder.AddToolBarButton(
+			FUIAction(FExecuteAction::CreateSP(this, &FDataAssetSheetEditorToolkit::OpenSettingsTab)),
+			NAME_None,
+			LOCTEXT("OpenSettingsText", "Settings"),
+			LOCTEXT("OpenSettingsTooltip", "Open the Settings tab"),
+			FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Settings"));
+	}
+	ToolbarBuilder.EndSection();
+}
+
+void FDataAssetSheetEditorToolkit::OpenSettingsTab()
+{
+	if (TSharedPtr<FTabManager> EditorTabManager = GetTabManager())
+	{
+		EditorTabManager->TryInvokeTab(SettingsTabId);
+	}
 }
 
 void FDataAssetSheetEditorToolkit::OnTargetClassHyperlinkClicked()

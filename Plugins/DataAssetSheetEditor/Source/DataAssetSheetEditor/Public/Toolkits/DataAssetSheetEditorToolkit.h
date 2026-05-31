@@ -36,6 +36,9 @@ private:
 	void ExtendToolbar(TSharedPtr<FExtender> Extender);
 	void FillToolbar(FToolBarBuilder& ToolbarBuilder);
 
+	// Settingsタブを開く / Open (or focus) the Settings tab
+	void OpenSettingsTab();
+
 	// Target Classハイパーリンククリック / Navigate to the target class definition
 	void OnTargetClassHyperlinkClicked();
 
