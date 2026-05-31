@@ -32,6 +32,19 @@
 
 #define LOCTEXT_NAMESPACE "SDataAssetSheetEditor"
 
+// 並び替え用ドラッグ操作の生成 / Build the row-reorder drag operation with a decorator
+TSharedRef<FDataAssetSheetRowDragDropOp> FDataAssetSheetRowDragDropOp::New(TArray<TSharedPtr<FDataAssetRowData>> InRows)
+{
+	TSharedRef<FDataAssetSheetRowDragDropOp> Op = MakeShared<FDataAssetSheetRowDragDropOp>();
+	Op->DraggedRows = MoveTemp(InRows);
+	Op->CurrentIconBrush = FAppStyle::GetBrush(TEXT("Graph.ConnectorFeedback.Ok"));
+	Op->CurrentHoverText = FText::Format(
+		LOCTEXT("DragRowsCount", "Move {0} row(s)"), Op->DraggedRows.Num());
+	Op->SetupDefaults();
+	Op->Construct();
+	return Op;
+}
+
 void SDataAssetSheetRow::Construct(const FArguments& InArgs, const TSharedRef<STableViewBase>& InOwnerTable,
 	TSharedPtr<FDataAssetRowData> InRowData, TSharedPtr<FDataAssetSheetModel> InModel,
 	TSharedPtr<SListView<TSharedPtr<FDataAssetRowData>>> InListView,
@@ -44,7 +57,119 @@ void SDataAssetSheetRow::Construct(const FArguments& InArgs, const TSharedRef<ST
 	ThumbnailPool = InThumbnailPool;
 	WeakSheet = InArgs._Sheet;
 	OnReplaceRowAsset = InArgs._OnReplaceRowAsset;
-	SMultiColumnTableRow::Construct(FSuperRowType::FArguments(), InOwnerTable);
+	OnDeleteRow = InArgs._OnDeleteRow;
+	OnReorderRows = InArgs._OnReorderRows;
+
+	// ドラッグ&ドロップ並び替えハンドラを登録 / Wire drag-and-drop reorder handlers into the table row
+	FSuperRowType::FArguments RowArgs;
+	RowArgs.OnDragDetected(FOnDragDetected::CreateSP(this, &SDataAssetSheetRow::HandleDragDetected));
+	RowArgs.OnCanAcceptDrop(FOnCanAcceptDrop::CreateSP(this, &SDataAssetSheetRow::HandleCanAcceptDrop));
+	RowArgs.OnAcceptDrop(FOnAcceptDrop::CreateSP(this, &SDataAssetSheetRow::HandleAcceptDrop));
+	SMultiColumnTableRow::Construct(RowArgs, InOwnerTable);
+}
+
+// この行がドラッグ並び替え可能か / Whether this row can participate in drag reorder
+bool SDataAssetSheetRow::CanReorder() const
+{
+	// 手動登録行（ManualAssetIndex 有効）のみ。ソート中は順序が ManualAssets と一致しないため不可。
+	// Manual rows only; disabled while a column sort is active (visual order would not match ManualAssets).
+	if (!RowData.IsValid() || RowData->ManualAssetIndex == INDEX_NONE)
+	{
+		return false;
+	}
+	if (Model.IsValid() && Model->GetSortMode() != EColumnSortMode::None)
+	{
+		return false;
+	}
+	return true;
+}
+
+FReply SDataAssetSheetRow::HandleDragDetected(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent)
+{
+	if (!CanReorder() || !OnReorderRows.IsBound())
+	{
+		return FReply::Unhandled();
+	}
+
+	// この行が選択に含まれていれば選択全体を、そうでなければこの行のみをドラッグ
+	// Drag the whole selection if this row is selected, otherwise just this row.
+	TArray<TSharedPtr<FDataAssetRowData>> RowsToDrag;
+	if (OwnerListView.IsValid())
+	{
+		TArray<TSharedPtr<FDataAssetRowData>> SelectedItems = OwnerListView->GetSelectedItems();
+		if (SelectedItems.Contains(RowData))
+		{
+			RowsToDrag = MoveTemp(SelectedItems);
+		}
+	}
+	if (RowsToDrag.IsEmpty())
+	{
+		RowsToDrag.Add(RowData);
+	}
+
+	// 並び替え可能な行（手動行）のみ対象 / Keep only reorderable (manual) rows
+	RowsToDrag.RemoveAll([](const TSharedPtr<FDataAssetRowData>& Row)
+	{
+		return !Row.IsValid() || Row->ManualAssetIndex == INDEX_NONE;
+	});
+	if (RowsToDrag.IsEmpty())
+	{
+		return FReply::Unhandled();
+	}
+
+	return FReply::Handled().BeginDragDrop(FDataAssetSheetRowDragDropOp::New(MoveTemp(RowsToDrag)));
+}
+
+TOptional<EItemDropZone> SDataAssetSheetRow::HandleCanAcceptDrop(const FDragDropEvent& DragDropEvent, EItemDropZone DropZone, TSharedPtr<FDataAssetRowData> TargetItem)
+{
+	TSharedPtr<FDataAssetSheetRowDragDropOp> Op = DragDropEvent.GetOperationAs<FDataAssetSheetRowDragDropOp>();
+	if (!Op.IsValid())
+	{
+		return TOptional<EItemDropZone>();
+	}
+
+	// ドロップ先は手動行かつ未ソートのみ / Drop target must be a manual row, and not while sorted
+	if (!TargetItem.IsValid() || TargetItem->ManualAssetIndex == INDEX_NONE)
+	{
+		return TOptional<EItemDropZone>();
+	}
+	if (Model.IsValid() && Model->GetSortMode() != EColumnSortMode::None)
+	{
+		return TOptional<EItemDropZone>();
+	}
+
+	// 自分自身（ドラッグ中の行）へはドロップ不可 / Cannot drop onto a row being dragged
+	if (Op->DraggedRows.Contains(TargetItem))
+	{
+		return TOptional<EItemDropZone>();
+	}
+
+	// 中央(Onto)は上方向として扱う / Treat "onto" as "above"
+	return (DropZone == EItemDropZone::BelowItem) ? EItemDropZone::BelowItem : EItemDropZone::AboveItem;
+}
+
+FReply SDataAssetSheetRow::HandleAcceptDrop(const FDragDropEvent& DragDropEvent, EItemDropZone DropZone, TSharedPtr<FDataAssetRowData> TargetItem)
+{
+	TSharedPtr<FDataAssetSheetRowDragDropOp> Op = DragDropEvent.GetOperationAs<FDataAssetSheetRowDragDropOp>();
+	if (!Op.IsValid() || !TargetItem.IsValid() || !OnReorderRows.IsBound())
+	{
+		return FReply::Unhandled();
+	}
+
+	const EItemDropZone ResolvedZone = (DropZone == EItemDropZone::BelowItem)
+		? EItemDropZone::BelowItem
+		: EItemDropZone::AboveItem;
+	OnReorderRows.Execute(Op->DraggedRows, TargetItem, ResolvedZone);
+	return FReply::Handled();
+}
+
+FReply SDataAssetSheetRow::OnDeleteRowClicked()
+{
+	if (RowData.IsValid() && OnDeleteRow.IsBound())
+	{
+		OnDeleteRow.Execute(RowData);
+	}
+	return FReply::Handled();
 }
 
 // 交互背景色 / Alternating row background color
@@ -726,6 +851,24 @@ TSharedRef<SWidget> SDataAssetSheetRow::GenerateAssetNameCell()
 									ReplaceDelegate.Execute(PinnedRow->AssetPath, NewAssetData);
 								}
 							})
+					]
+
+				// 削除ボタン（この行を ManualAssets から除外）/ Delete button (remove this row from ManualAssets)
+				+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					.Padding(FMargin(4.0f, 0.0f, 0.0f, 0.0f))
+					[
+						SNew(SButton)
+							.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+							.ContentPadding(FMargin(2.0f, 0.0f))
+							.ToolTipText(LOCTEXT("DeleteRowTooltip", "この行をシートから削除 / Remove this row from the sheet"))
+							.OnClicked(this, &SDataAssetSheetRow::OnDeleteRowClicked)
+							[
+								SNew(SImage)
+									.Image(FAppStyle::GetBrush("Icons.Delete"))
+									.ColorAndOpacity(FSlateColor::UseForeground())
+							]
 					]
 
 			];

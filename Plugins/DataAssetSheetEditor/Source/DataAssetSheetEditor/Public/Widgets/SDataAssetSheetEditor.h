@@ -148,6 +148,13 @@ private:
 	// 行のアセットを差し替え（ピッカーからの選択）/ Replace a row's asset (picked from the cell picker)
 	void ReplaceRowAsset(const FSoftObjectPath& OldPath, const FAssetData& NewAsset);
 
+	// 1行を ManualAssets から削除（インライン削除ボタン）/ Remove a single row from ManualAssets (inline delete button)
+	void RemoveRowFromManualAssets(TSharedPtr<FDataAssetRowData> RowData);
+
+	// ドラッグ&ドロップで ManualAssets の行を並び替え / Reorder ManualAssets rows via drag and drop
+	void ReorderManualAssetRows(const TArray<TSharedPtr<FDataAssetRowData>>& DraggedRows,
+		TSharedPtr<FDataAssetRowData> TargetRow, EItemDropZone DropZone);
+
 	// アセット複製 / Duplicate selected asset
 	void DuplicateSelectedAsset();
 

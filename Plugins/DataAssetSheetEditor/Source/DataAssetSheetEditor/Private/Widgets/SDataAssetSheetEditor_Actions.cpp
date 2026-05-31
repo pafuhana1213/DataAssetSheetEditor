@@ -388,6 +388,104 @@ void SDataAssetSheetEditor::ReplaceRowAsset(const FSoftObjectPath& OldPath, cons
 }
 
 
+void SDataAssetSheetEditor::RemoveRowFromManualAssets(TSharedPtr<FDataAssetRowData> RowData)
+{
+	UDataAssetSheet* Sheet = DataAssetSheet.Get();
+	if (!Sheet || Sheet->bShowAll || !RowData.IsValid())
+	{
+		return;
+	}
+
+	// 空行も含め正確に1行だけ消すため、パスではなく ManualAssets インデックスで削除する
+	// Delete by ManualAssets index (not by path) so a single row — empty rows included — is removed exactly.
+	const int32 Index = RowData->ManualAssetIndex;
+	if (!Sheet->ManualAssets.IsValidIndex(Index))
+	{
+		return;
+	}
+
+	FScopedTransaction Transaction(LOCTEXT("RemoveRowTransaction", "Remove Row from Sheet"));
+	Sheet->Modify();
+	Sheet->ManualAssets.RemoveAt(Index);
+	Sheet->MarkPackageDirty();
+
+	DetailsView->SetObject(nullptr);
+	RebuildTable();
+}
+
+
+void SDataAssetSheetEditor::ReorderManualAssetRows(const TArray<TSharedPtr<FDataAssetRowData>>& DraggedRows,
+	TSharedPtr<FDataAssetRowData> TargetRow, EItemDropZone DropZone)
+{
+	UDataAssetSheet* Sheet = DataAssetSheet.Get();
+	if (!Sheet || Sheet->bShowAll || !TargetRow.IsValid())
+	{
+		return;
+	}
+
+	const int32 TargetIndex = TargetRow->ManualAssetIndex;
+	if (!Sheet->ManualAssets.IsValidIndex(TargetIndex))
+	{
+		return;
+	}
+
+	// 移動対象の ManualAssets インデックスを収集 / Collect the ManualAssets indices being moved
+	TArray<int32> MovedIndices;
+	for (const TSharedPtr<FDataAssetRowData>& Row : DraggedRows)
+	{
+		if (Row.IsValid() && Sheet->ManualAssets.IsValidIndex(Row->ManualAssetIndex))
+		{
+			MovedIndices.AddUnique(Row->ManualAssetIndex);
+		}
+	}
+	if (MovedIndices.IsEmpty() || MovedIndices.Contains(TargetIndex))
+	{
+		return;
+	}
+	MovedIndices.Sort();
+	const TSet<int32> MovedSet(MovedIndices);
+
+	// 移動するエントリを元の順序のまま取り出す / Extract moved entries preserving their original relative order
+	TArray<TSoftObjectPtr<UDataAsset>> MovedEntries;
+	MovedEntries.Reserve(MovedIndices.Num());
+	for (int32 Idx : MovedIndices)
+	{
+		MovedEntries.Add(Sheet->ManualAssets[Idx]);
+	}
+
+	// 残りを順序保持で集めつつ、ターゲットの挿入位置を求める / Build remaining list and locate the target's position
+	TArray<TSoftObjectPtr<UDataAsset>> Remaining;
+	Remaining.Reserve(Sheet->ManualAssets.Num() - MovedIndices.Num());
+	int32 TargetPos = INDEX_NONE;
+	for (int32 i = 0; i < Sheet->ManualAssets.Num(); ++i)
+	{
+		if (MovedSet.Contains(i))
+		{
+			continue;
+		}
+		if (i == TargetIndex)
+		{
+			TargetPos = Remaining.Num();
+		}
+		Remaining.Add(Sheet->ManualAssets[i]);
+	}
+	if (TargetPos == INDEX_NONE)
+	{
+		return;
+	}
+
+	const int32 InsertPos = (DropZone == EItemDropZone::BelowItem) ? TargetPos + 1 : TargetPos;
+
+	FScopedTransaction Transaction(LOCTEXT("ReorderRowsTransaction", "Reorder Sheet Rows"));
+	Sheet->Modify();
+	Remaining.Insert(MovedEntries, InsertPos);
+	Sheet->ManualAssets = MoveTemp(Remaining);
+	Sheet->MarkPackageDirty();
+
+	RebuildTable();
+}
+
+
 void SDataAssetSheetEditor::AddEmptyRow()
 {
 	UDataAssetSheet* Sheet = DataAssetSheet.Get();

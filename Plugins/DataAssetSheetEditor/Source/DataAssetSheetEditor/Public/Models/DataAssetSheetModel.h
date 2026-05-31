@@ -32,6 +32,12 @@ struct FDataAssetRowData
 	// Asset class resolved from AssetRegistry (available before the asset itself is loaded)
 	TWeakObjectPtr<UClass> AssetClass;
 
+	// 由来となった ManualAssets のインデックス（手動登録行のみ有効、それ以外は INDEX_NONE）
+	// Source index into the sheet's ManualAssets array (valid for manual rows only, INDEX_NONE otherwise).
+	// 空行（null パス）は重複排除されないため、並び替え/削除はパスではなくこのインデックスで識別する。
+	// Empty (null-path) rows are not deduped, so reorder/delete identify rows by this index, not by path.
+	int32 ManualAssetIndex = INDEX_NONE;
+
 	// プロパティ表示文字列キャッシュ（フィルタ/ソート高速化用）
 	// Cached display text per property column, keyed by FProperty::GetFName()
 	TMap<FName, FString> CachedDisplayText;

@@ -739,7 +739,9 @@ TSharedRef<ITableRow> SDataAssetSheetEditor::OnGenerateRow(TSharedPtr<FDataAsset
 	return SNew(SDataAssetSheetRow, OwnerTable, InRowData, Model, AssetListView, ThumbnailPool)
 		.IndexInList(Index)
 		.Sheet(DataAssetSheet)
-		.OnReplaceRowAsset(FOnReplaceRowAsset::CreateSP(this, &SDataAssetSheetEditor::ReplaceRowAsset));
+		.OnReplaceRowAsset(FOnReplaceRowAsset::CreateSP(this, &SDataAssetSheetEditor::ReplaceRowAsset))
+		.OnDeleteRow(FOnDeleteRow::CreateSP(this, &SDataAssetSheetEditor::RemoveRowFromManualAssets))
+		.OnReorderRows(FOnReorderRows::CreateSP(this, &SDataAssetSheetEditor::ReorderManualAssetRows));
 }
 
 void SDataAssetSheetEditor::OnSelectionChanged(TSharedPtr<FDataAssetRowData> InRowData, ESelectInfo::Type SelectInfo)

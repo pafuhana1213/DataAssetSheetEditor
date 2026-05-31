@@ -79,8 +79,11 @@ void FDataAssetSheetModel::DiscoverAssets(UClass* InTargetClass, bool bShowAll,
 	}
 
 	// 2. 手動登録アセットを追加 / Add manually registered assets
-	for (const TSoftObjectPtr<UDataAsset>& SoftPtr : ManualAssets)
+	// ManualAssets のインデックスを行データに記録し、並び替え/削除で空行も含め一意に識別できるようにする
+	// Record each row's ManualAssets index so reorder/delete can identify rows uniquely, empty rows included.
+	for (int32 ManualIndex = 0; ManualIndex < ManualAssets.Num(); ++ManualIndex)
 	{
+		const TSoftObjectPtr<UDataAsset>& SoftPtr = ManualAssets[ManualIndex];
 		FSoftObjectPath Path = SoftPtr.ToSoftObjectPath();
 		if (Path.IsNull())
 		{
@@ -90,6 +93,7 @@ void FDataAssetSheetModel::DiscoverAssets(UClass* InTargetClass, bool bShowAll,
 			EmptyRow->AssetPath = FSoftObjectPath();
 			EmptyRow->AssetName.Reset();
 			EmptyRow->AssetClass = InTargetClass;
+			EmptyRow->ManualAssetIndex = ManualIndex;
 			RowDataList.Add(EmptyRow);
 			continue;
 		}
@@ -103,6 +107,7 @@ void FDataAssetSheetModel::DiscoverAssets(UClass* InTargetClass, bool bShowAll,
 		if (AssetData.IsValid())
 		{
 			AddRowDataFromAssetData(AssetData, AddedPaths);
+			RowDataList.Last()->ManualAssetIndex = ManualIndex;
 		}
 	}
 
