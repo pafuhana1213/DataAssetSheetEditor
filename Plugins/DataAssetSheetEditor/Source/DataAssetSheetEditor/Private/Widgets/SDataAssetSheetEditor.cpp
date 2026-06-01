@@ -58,6 +58,16 @@ static constexpr float MaxColumnWidth = 600.0f;
 static constexpr float AutoFitHorizontalPadding = 16.0f;   // セル左右4px×2 + 余裕8px / cell horizontal padding + slack
 static constexpr float AutoFitHeaderSortIndicator = 18.0f; // ソート矢印分の余白 / sort arrow allowance
 
+// 編集モードのAssetNameセルはピッカー(コンボ+矢印+Use/Browseボタン)と削除ボタンを描画するため、
+// 名前テキスト以外の固定UI幅を確保する。Slateスタイル/DPIで実寸が多少変わるため検証で微調整する見積り値。
+// Editable AssetName cells render an asset picker (combo + dropdown + use/browse) plus a delete button.
+// Reserve fixed chrome beyond the name text; tunable estimate (varies slightly with Slate style/DPI).
+static constexpr float AutoFitAssetPickerChrome = 96.0f;
+
+// 読み取り専用のAssetNameセル(ShowAll/コレクション行)は名前の末尾にBrowseボタンを描画するため、その分を確保
+// Read-only AssetName cells (ShowAll / collection rows) trail a Browse button; reserve room for it.
+static constexpr float AutoFitAssetBrowseChrome = 32.0f;
+
 // 文字列の描画幅を測る (改行入りなら最長行を返す) / Measure rendering width, taking the longest line for multiline strings
 static float MeasureMaxLineWidth(const FString& InText, const FSlateFontInfo& InFont)
 {
@@ -622,6 +632,10 @@ float SDataAssetSheetEditor::ComputeAutoFitWidthForColumn(FName ColumnId, FPrope
 	if (bMeasureFromCachedText)
 	{
 		const bool bIsAssetNameColumn = (Property == nullptr);
+		// 編集モード(bShowAll==false)では手動行のAssetNameセルがピッカーUIになるため別途chromeを足す
+		// In editable mode the manual-row AssetName cells become an asset picker; add chrome for it.
+		const UDataAssetSheet* Sheet = DataAssetSheet.Get();
+		const bool bSheetEditable = (Sheet && !Sheet->bShowAll);
 		for (const TSharedPtr<FDataAssetRowData>& RowData : Model->GetRowDataList())
 		{
 			if (!RowData.IsValid())
@@ -645,7 +659,15 @@ float SDataAssetSheetEditor::ComputeAutoFitWidthForColumn(FName ColumnId, FPrope
 				CellText = *Cached;
 			}
 
-			MaxCellWidth = FMath::Max(MaxCellWidth, MeasureMaxLineWidth(CellText, Font));
+			float CellWidth = MeasureMaxLineWidth(CellText, Font);
+			// AssetNameセルは名前の末尾にボタンが付く。編集可能な手動行はピッカー一式、それ以外(ShowAll/コレクション)はBrowseボタン分を確保
+			// AssetName cells trail a button: editable manual rows reserve the full picker, read-only rows the browse button.
+			if (bIsAssetNameColumn)
+			{
+				const bool bRowEditable = bSheetEditable && (RowData->ManualAssetIndex != INDEX_NONE);
+				CellWidth += bRowEditable ? AutoFitAssetPickerChrome : AutoFitAssetBrowseChrome;
+			}
+			MaxCellWidth = FMath::Max(MaxCellWidth, CellWidth);
 		}
 	}
 
