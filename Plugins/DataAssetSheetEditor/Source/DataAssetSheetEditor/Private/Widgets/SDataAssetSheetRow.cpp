@@ -854,10 +854,14 @@ TSharedRef<SWidget> SDataAssetSheetRow::GenerateAssetNameCell()
 					]
 
 				// 削除ボタン（この行を ManualAssets から除外）/ Delete button (remove this row from ManualAssets)
+				// SObjectPropertyEntryBox 側がボタン群に固定 6px（ラッパー4px + ブラウズボタン2px）の余白を付けるため、
+				// 左を -2px にしてアセットピッカー内ボタン同士と同じ 4px 間隔に揃える
+				// SObjectPropertyEntryBox adds a fixed 6px trailing margin (4px wrapper + 2px browse button);
+				// offset by -2px so the gap matches the 4px spacing between the picker's own buttons.
 				+ SHorizontalBox::Slot()
 					.AutoWidth()
 					.VAlign(VAlign_Center)
-					.Padding(FMargin(4.0f, 0.0f, 0.0f, 0.0f))
+					.Padding(FMargin(-2.0f, 0.0f, 0.0f, 0.0f))
 					[
 						SNew(SButton)
 							.ButtonStyle(FAppStyle::Get(), "SimpleButton")
