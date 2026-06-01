@@ -144,6 +144,19 @@ TArray<UClass*> UDataAssetSheet::GetAllowedDisplayClasses() const
 	return AllowedClasses;
 }
 
+TArray<UClass*> UDataAssetSheet::GetManualAssetAllowedClasses() const
+{
+	// TargetClass未指定時は空配列を返し、フィルタなし（全DataAsset表示）にフォールバック
+	// Return empty when TargetClass is unset to fall back to no filtering (all DataAssets)
+	TArray<UClass*> AllowedClasses;
+	if (TargetClass)
+	{
+		AllowedClasses.Add(TargetClass.Get());
+	}
+
+	return AllowedClasses;
+}
+
 #if WITH_EDITOR
 void UDataAssetSheet::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {

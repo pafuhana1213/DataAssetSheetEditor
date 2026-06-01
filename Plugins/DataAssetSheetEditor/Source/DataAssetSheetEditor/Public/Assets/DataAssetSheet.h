@@ -41,7 +41,8 @@ public:
 	bool bShowAll = false;
 
 	// 手動登録アセットリスト / Manually registered asset list
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "DataAssetSheet|Settings")
+	// GetAllowedClassesでアセットピッカーをTargetClassのみに絞り込む / Filter the asset picker to TargetClass only
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "DataAssetSheet|Settings", meta = (GetAllowedClasses = "GetManualAssetAllowedClasses"))
 	TArray<TSoftObjectPtr<UDataAsset>> ManualAssets;
 
 	// コレクション参照リスト / Collection references for asset registration
@@ -59,6 +60,11 @@ public:
 
 	UFUNCTION()
 	TArray<UClass*> GetAllowedDisplayClasses() const;
+
+	// ManualAssetsのアセットピッカーで選択可能なクラス（TargetClass）を返す
+	// Returns the classes selectable in the ManualAssets asset picker (TargetClass)
+	UFUNCTION()
+	TArray<UClass*> GetManualAssetAllowedClasses() const;
 
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
